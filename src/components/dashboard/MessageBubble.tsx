@@ -1,4 +1,7 @@
-import { motion } from 'framer-motion';
+import { useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { openPath } from '@tauri-apps/plugin-opener';
+import { X } from 'lucide-react';
 import type { Message } from '@/types';
 
 interface MessageBubbleProps {
@@ -7,6 +10,7 @@ interface MessageBubbleProps {
 
 export function MessageBubble({ message }: MessageBubbleProps) {
   const isUser = message.role === 'user';
+  const [showAllSources, setShowAllSources] = useState(false);
 
   return (
     <motion.div
@@ -82,9 +86,10 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                 Sources
               </div>
               <div className="flex flex-wrap gap-2">
-                {message.sources.map((source, idx) => (
+                {message.sources.slice(0, 3).map((source, idx) => (
                   <div
                     key={idx}
+                    onClick={() => openPath(source.filePath)}
                     className="flex flex-col bg-surface-primary/30 border border-border-subtle rounded-md px-2.5 py-2 hover:border-accent-500/30 transition-colors max-w-sm group cursor-pointer"
                     title={source.textSnippet}
                   >
@@ -96,11 +101,74 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                     </span>
                   </div>
                 ))}
+                {message.sources.length > 3 && (
+                  <button
+                    onClick={() => setShowAllSources(true)}
+                    className="flex items-center justify-center text-xs text-accent-400 hover:text-accent-300 px-3 rounded-md border border-dashed border-accent-500/30 hover:border-accent-500/50 hover:bg-accent-500/10 transition-colors cursor-pointer"
+                  >
+                    +{message.sources.length - 3} more
+                  </button>
+                )}
               </div>
             </div>
           )}
         </div>
       </div>
+
+      {/* Sources Modal */}
+      <AnimatePresence>
+        {showAllSources && message.sources && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+            onClick={() => setShowAllSources(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-surface-secondary border border-border-default rounded-xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl"
+            >
+              <div className="flex items-center justify-between px-5 py-4 border-b border-border-subtle">
+                <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="size-4 text-accent-500">
+                    <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" />
+                  </svg>
+                  All Sources ({message.sources.length})
+                </h3>
+                <button
+                  onClick={() => setShowAllSources(false)}
+                  className="p-1 rounded-md text-text-tertiary hover:text-text-primary hover:bg-surface-tertiary transition-colors cursor-pointer border-none"
+                >
+                  <X className="size-4" />
+                </button>
+              </div>
+              <div className="p-5 overflow-y-auto space-y-3">
+                {message.sources.map((source, idx) => (
+                  <div
+                    key={idx}
+                    onClick={() => openPath(source.filePath)}
+                    className="flex flex-col bg-surface-primary/30 border border-border-subtle rounded-md px-4 py-3 hover:border-accent-500/30 transition-colors group cursor-pointer"
+                  >
+                    <span className="text-sm font-medium text-accent-300 truncate mb-1">
+                      {source.filePath.split('/').pop() || source.filePath.split('\\').pop() || source.filePath}
+                    </span>
+                    <span className="text-xs text-text-tertiary leading-relaxed group-hover:text-text-secondary transition-colors">
+                      {source.textSnippet}
+                    </span>
+                    <span className="text-[10px] text-text-tertiary/50 truncate mt-2">
+                      {source.filePath}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }

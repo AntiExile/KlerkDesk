@@ -121,7 +121,7 @@ body {
 
 /* ── Focus ring ── */
 
-*:focus-visible {
+*:focus-visible:not(input):not(textarea) {
   outline: 2px solid var(--color-accent-500);
   outline-offset: 2px;
 }

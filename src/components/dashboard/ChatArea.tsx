@@ -240,6 +240,7 @@ export function ChatArea() {
               rows={1}
               className={`
                 flex-1 resize-none bg-transparent border-none outline-none
+                focus:outline-none focus:ring-0 focus-visible:ring-0 focus-visible:outline-none
                 text-sm text-text-primary placeholder:text-text-tertiary
                 py-1 leading-relaxed max-h-40
               `}
