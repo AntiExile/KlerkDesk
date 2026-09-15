@@ -1,73 +1,51 @@
 import { useState, useRef, useEffect, type KeyboardEvent } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Paperclip, ArrowUp } from 'lucide-react';
+import { Paperclip, ArrowUp, Filter, Square } from 'lucide-react';
 import { IconButton } from '@/components/ui/IconButton';
 import { MessageBubble } from './MessageBubble';
 import type { Message, SourceCitation } from '@/types';
 
-const INITIAL_MESSAGES: Message[] = [
-  {
-    id: '1',
-    role: 'assistant',
-    content:
-      "Welcome to **MundusAI**. I'm your local AI assistant — everything runs privately on your machine. How can I help you today?",
-    timestamp: new Date(Date.now() - 300000),
-    contentType: 'text',
-  },
-  {
-    id: '2',
-    role: 'user',
-    content: 'Summarize the key terms from the Acme Corp contract.',
-    timestamp: new Date(Date.now() - 240000),
-    contentType: 'text',
-  },
-  {
-    id: '3',
-    role: 'assistant',
-    content:
-      'Here are the key terms from the **Acme Corp** service agreement:\n\n• **Term**: 24 months, auto-renewing\n• **Liability cap**: $500,000\n• **Termination notice**: 90 days written notice\n• **Non-compete**: 12-month post-termination\n• **Governing law**: State of Delaware\n\nWould you like me to flag any clauses that deviate from your standard template?',
-    timestamp: new Date(Date.now() - 180000),
-    contentType: 'text',
-  },
-  {
-    id: '4',
-    role: 'user',
-    content: 'Show me last quarter invoices by client.',
-    timestamp: new Date(Date.now() - 120000),
-    contentType: 'text',
-  },
-  {
-    id: '5',
-    role: 'assistant',
-    content: `<table>
-<thead><tr><th>Client</th><th>Invoices</th><th>Total</th><th>Status</th></tr></thead>
-<tbody>
-<tr><td>Acme Corp</td><td>3</td><td>$45,200</td><td>Paid</td></tr>
-<tr><td>Beta Industries</td><td>2</td><td>$28,750</td><td>Paid</td></tr>
-<tr><td>Gamma LLC</td><td>4</td><td>$62,100</td><td>Partial</td></tr>
-<tr><td>Delta Partners</td><td>1</td><td>$15,000</td><td>Overdue</td></tr>
-</tbody>
-</table>`,
-    timestamp: new Date(Date.now() - 60000),
-    contentType: 'table',
-  },
-];
+interface ChatAreaProps {
+  activeFolderPaths: string[];
+  messages: Message[];
+  onMessagesChange: (updater: (prev: Message[]) => Message[]) => void;
+  conversationTitle: string;
+}
 
-export function ChatArea() {
-  const [messages, setMessages] = useState<Message[]>(INITIAL_MESSAGES);
+export function ChatArea({
+  activeFolderPaths,
+  messages,
+  onMessagesChange,
+  conversationTitle,
+}: ChatAreaProps) {
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  const scrollToBottom = (behavior: 'smooth' | 'auto' = 'smooth') => {
+    messagesEndRef.current?.scrollIntoView({ behavior });
   };
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    if (autoScrollEnabled) {
+      // Use auto to prevent janky scrolling during fast streaming
+      scrollToBottom('auto');
+    }
+  }, [messages, autoScrollEnabled]);
+
+  const handleScroll = () => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    
+    // If the user scrolls up, disable auto-scrolling.
+    // We consider "at bottom" to be within 50px of the very bottom.
+    const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 50;
+    setAutoScrollEnabled(isNearBottom);
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -77,7 +55,7 @@ export function ChatArea() {
 
     const setupListeners = async () => {
       const uToken = await listen<{ message_id: string; token: string }>('chat-token', (event) => {
-        setMessages((prev) =>
+        onMessagesChange((prev) =>
           prev.map((msg) =>
             msg.id === event.payload.message_id
               ? { ...msg, content: msg.content + event.payload.token, isThinking: false }
@@ -89,7 +67,7 @@ export function ChatArea() {
       unlistenToken = uToken;
 
       const uSources = await listen<{ message_id: string; sources: SourceCitation[] }>('chat-sources', (event) => {
-        setMessages((prev) =>
+        onMessagesChange((prev) =>
           prev.map((msg) =>
             msg.id === event.payload.message_id
               ? { ...msg, sources: event.payload.sources }
@@ -100,9 +78,8 @@ export function ChatArea() {
       if (!isMounted) { uSources(); return; }
       unlistenSources = uSources;
 
-      // Listen for stream completion
       const uDone = await listen<{ message_id: string }>('chat-done', (event) => {
-        setMessages((prev) =>
+        onMessagesChange((prev) =>
           prev.map((msg) =>
             msg.id === event.payload.message_id
               ? { ...msg, isThinking: false }
@@ -123,7 +100,7 @@ export function ChatArea() {
       if (unlistenSources) unlistenSources();
       if (unlistenDone) unlistenDone();
     };
-  }, []);
+  }, [onMessagesChange]);
 
   const handleSubmit = () => {
     const trimmed = input.trim();
@@ -149,17 +126,21 @@ export function ChatArea() {
       isThinking: true,
     };
 
-    setMessages((prev) => [...prev, userMessage, aiMessage]);
+    onMessagesChange((prev) => [...prev, userMessage, aiMessage]);
     setInput('');
+    setAutoScrollEnabled(true);
+    
+    // Force immediate scroll down when submitting
+    setTimeout(() => scrollToBottom('smooth'), 50);
 
     // Reset textarea height
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
 
-    invoke('ask_question', { messageId: aiMessageId, prompt: trimmed })
+    invoke('ask_question', { messageId: aiMessageId, prompt: trimmed, folderFilters: activeFolderPaths })
       .catch((error) => {
-        setMessages((prev) =>
+        onMessagesChange((prev) =>
           prev.map((msg) =>
             msg.id === aiMessageId
               ? { ...msg, content: `**Error querying MundusAI**: ${error}`, isThinking: false }
@@ -168,6 +149,18 @@ export function ChatArea() {
         );
         setIsStreaming(false);
       });
+  };
+
+  const handleStop = async () => {
+    // Find the currently generating message
+    const thinkingMsg = messages.find((m) => m.isThinking);
+    if (thinkingMsg) {
+      try {
+        await invoke('cancel_question', { messageId: thinkingMsg.id });
+      } catch (err) {
+        console.error('[MundusAI] Failed to cancel question:', err);
+      }
+    }
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -191,17 +184,42 @@ export function ChatArea() {
       <div className="h-12 flex items-center justify-between px-5 border-b border-border-subtle shrink-0 drag-region">
         <div className="flex items-center gap-3 no-drag">
           <h1 className="text-sm font-medium text-text-primary">
-            New Conversation
+            {conversationTitle}
           </h1>
           <span className="text-[11px] px-2 py-0.5 rounded-full bg-accent-600/15 text-accent-400 font-medium border border-accent-700/20">
             Local Model
           </span>
+          {activeFolderPaths.length > 0 && (
+            <span className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-accent-600/10 text-accent-400/80 border border-accent-700/15">
+              <Filter className="size-2.5" />
+              {activeFolderPaths.length === 1
+                ? activeFolderPaths[0].split('/').pop()
+                : `${activeFolderPaths.length} folders`}
+            </span>
+          )}
         </div>
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-5 py-5">
+      <div 
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto px-5 py-5"
+      >
         <div className="max-w-3xl mx-auto">
+          {messages.length === 0 && (
+            <div className="flex flex-col items-center justify-center h-full py-20 text-center">
+              <div className="size-12 rounded-2xl bg-gradient-to-br from-accent-400/20 to-accent-600/20 flex items-center justify-center mb-4">
+                <span className="text-accent-400 text-xl font-bold">M</span>
+              </div>
+              <h2 className="text-base font-medium text-text-primary mb-1">
+                How can I help you today?
+              </h2>
+              <p className="text-sm text-text-tertiary max-w-xs">
+                Ask me anything about your synced documents. Everything runs locally on your machine.
+              </p>
+            </div>
+          )}
           {messages.map((msg) => (
             <MessageBubble key={msg.id} message={msg} />
           ))}
@@ -246,21 +264,32 @@ export function ChatArea() {
               `}
             />
 
-            <button
-              type="button"
-              onClick={handleSubmit}
-              disabled={!input.trim()}
-              className={`
-                size-7 rounded-lg flex items-center justify-center
-                transition-all duration-150 cursor-pointer border-none mb-0.5
-                ${input.trim()
-                  ? 'bg-accent-500 text-white hover:bg-accent-400 shadow-sm shadow-accent-500/25'
-                  : 'bg-surface-tertiary text-text-tertiary cursor-not-allowed'
-                }
-              `}
-            >
-              <ArrowUp className="size-4" />
-            </button>
+            {isStreaming ? (
+              <button
+                type="button"
+                onClick={handleStop}
+                className="size-7 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer border-none mb-0.5 bg-surface-tertiary text-text-primary hover:bg-surface-tertiary/80 hover:text-status-error"
+                title="Stop generating"
+              >
+                <Square className="size-3.5 fill-current" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleSubmit}
+                disabled={!input.trim()}
+                className={`
+                  size-7 rounded-lg flex items-center justify-center
+                  transition-all duration-150 cursor-pointer border-none mb-0.5
+                  ${input.trim()
+                    ? 'bg-accent-500 text-white hover:bg-accent-400 shadow-sm shadow-accent-500/25'
+                    : 'bg-surface-tertiary text-text-tertiary cursor-not-allowed'
+                  }
+                `}
+              >
+                <ArrowUp className="size-4" />
+              </button>
+            )}
           </div>
 
           <p className="text-[10px] text-text-tertiary/50 text-center mt-2">

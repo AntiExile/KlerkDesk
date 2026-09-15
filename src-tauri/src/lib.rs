@@ -15,6 +15,10 @@ pub struct EngineState {
     pub child: Mutex<Option<CommandChild>>,
 }
 
+pub struct QueryState {
+    pub active_queries: Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>,
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -32,10 +36,14 @@ pub fn run() {
             commands::get_folder_files,
             commands::get_total_file_count,
             commands::ask_question,
+            commands::cancel_question,
             commands::pick_model_folder,
             commands::test_connection,
             commands::restart_engine,
         ])
+        .manage(QueryState {
+            active_queries: Mutex::new(std::collections::HashMap::new()),
+        })
         .setup(|app| {
             // Give the watcher access to the app handle so it can emit events
             let state = app.state::<Mutex<WatcherState>>();
