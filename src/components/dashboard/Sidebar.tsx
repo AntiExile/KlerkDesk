@@ -2,13 +2,11 @@ import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import {
-  Folder,
-  ChevronRight,
-  ChevronDown,
+  FolderOpen,
+  Trash2,
+  Plus,
+  Loader2,
   Settings,
-  FileText,
-  Scale,
-  Receipt,
 } from 'lucide-react';
 import { StatusDot } from '@/components/ui/StatusDot';
 import { IconButton } from '@/components/ui/IconButton';
@@ -17,84 +15,77 @@ interface SidebarProps {
   onOpenSettings: () => void;
 }
 
-interface FolderItem {
+interface WatchedFolderInfo {
   id: string;
   name: string;
-  icon: React.ReactNode;
-  children?: { id: string; name: string }[];
+  path: string;
+  addedAt: string;
+  fileCount: number;
 }
 
-const mockFolders: FolderItem[] = [
-  {
-    id: 'invoices',
-    name: 'Invoices',
-    icon: <Receipt className="size-4" />,
-    children: [
-      { id: 'inv-2024', name: '2024' },
-      { id: 'inv-2025', name: '2025' },
-    ],
-  },
-  {
-    id: 'contracts',
-    name: 'Client Contracts',
-    icon: <Scale className="size-4" />,
-    children: [
-      { id: 'con-active', name: 'Active' },
-      { id: 'con-archived', name: 'Archived' },
-    ],
-  },
-  {
-    id: 'tax',
-    name: 'Tax Returns',
-    icon: <FileText className="size-4" />,
-  },
-];
-
 export function Sidebar({ onOpenSettings }: SidebarProps) {
-  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(
-    new Set(['invoices'])
-  );
-  const [syncStatus, setSyncStatus] = useState<'synced' | 'indexing'>('synced');
+  const [folders, setFolders] = useState<WatchedFolderInfo[]>([]);
   const [docCount, setDocCount] = useState<number>(0);
+  const [syncStatus, setSyncStatus] = useState<'synced' | 'indexing'>('synced');
+  const [adding, setAdding] = useState(false);
 
-  const refreshCount = useCallback(async () => {
+  // ── Fetch folders + total count from the backend ──
+  const refreshData = useCallback(async () => {
     try {
-      const count = await invoke<number>('get_total_file_count');
+      const [folderList, count] = await Promise.all([
+        invoke<WatchedFolderInfo[]>('get_watched_folders'),
+        invoke<number>('get_total_file_count'),
+      ]);
+      setFolders(folderList);
       setDocCount(count);
-    } catch {
-      // Silently ignore — count stays at last known value
+    } catch (err) {
+      console.error('[MundusAI] Failed to refresh sidebar data:', err);
     }
   }, []);
 
-  // Load initial count
+  // Load on mount
   useEffect(() => {
-    refreshCount();
-  }, [refreshCount]);
+    refreshData();
+  }, [refreshData]);
 
-  // Listen for FS changes: flash "Indexing" status, then refresh count
+  // React to filesystem changes — flash indexing status, then refresh
   useEffect(() => {
     const unlisten = listen('mundusai://fs-change', () => {
       setSyncStatus('indexing');
-      refreshCount().then(() => {
-        // Show "indexing" briefly, then switch back to "synced"
+      refreshData().then(() => {
         setTimeout(() => setSyncStatus('synced'), 1500);
       });
     });
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [refreshCount]);
+  }, [refreshData]);
 
-  const toggleFolder = (id: string) => {
-    setExpandedFolders((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
+  // ── Add a folder via the native OS picker ──
+  const handleAddFolder = async () => {
+    setAdding(true);
+    try {
+      const selectedPath = await invoke<string | null>('pick_folder');
+      if (selectedPath) {
+        await invoke<WatchedFolderInfo>('add_watched_folder', { path: selectedPath });
+        await refreshData();
       }
-      return next;
-    });
+    } catch (err) {
+      console.error('[MundusAI] Failed to add folder:', err);
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  // ── Remove a folder ──
+  const handleRemoveFolder = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation(); // prevent any parent click handlers
+    try {
+      await invoke('remove_watched_folder', { id });
+      await refreshData();
+    } catch (err) {
+      console.error('[MundusAI] Failed to remove folder:', err);
+    }
   };
 
   return (
@@ -120,61 +111,52 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
         </div>
 
         <nav className="space-y-0.5">
-          {mockFolders.map((folder) => {
-            const isExpanded = expandedFolders.has(folder.id);
-            const hasChildren = folder.children && folder.children.length > 0;
-
-            return (
-              <div key={folder.id}>
+          {folders.length === 0 && !adding ? (
+            <div className="px-2 py-6 text-center text-xs text-text-tertiary">
+              No folders synced yet.
+              <br />
+              Add one to start indexing documents.
+            </div>
+          ) : (
+            folders.map((folder) => (
+              <div
+                key={folder.id}
+                className="group flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-text-secondary hover:text-text-primary hover:bg-surface-tertiary/50 transition-colors duration-150"
+              >
+                <FolderOpen className="size-4 text-text-tertiary shrink-0" />
+                <span className="truncate flex-1" title={folder.path}>
+                  {folder.name}
+                </span>
+                <span className="text-[10px] text-text-tertiary tabular-nums shrink-0 group-hover:hidden">
+                  {folder.fileCount.toLocaleString()}
+                </span>
                 <button
-                  onClick={() => toggleFolder(folder.id)}
-                  className={`
-                    w-full flex items-center gap-2 px-2 py-1.5 rounded-md
-                    text-sm text-text-secondary
-                    hover:text-text-primary hover:bg-surface-tertiary/50
-                    transition-colors duration-150 cursor-pointer
-                    bg-transparent border-none text-left
-                  `}
+                  type="button"
+                  onClick={(e) => handleRemoveFolder(e, folder.id)}
+                  className="hidden group-hover:flex size-5 rounded items-center justify-center hover:bg-status-error/10 text-text-tertiary hover:text-status-error transition-colors cursor-pointer border-none bg-transparent shrink-0"
+                  title="Remove folder"
                 >
-                  <span className="text-text-tertiary shrink-0">
-                    {hasChildren ? (
-                      isExpanded ? (
-                        <ChevronDown className="size-3.5" />
-                      ) : (
-                        <ChevronRight className="size-3.5" />
-                      )
-                    ) : (
-                      <span className="inline-block size-3.5" />
-                    )}
-                  </span>
-                  <span className="text-text-tertiary shrink-0">{folder.icon}</span>
-                  <span className="truncate">{folder.name}</span>
+                  <Trash2 className="size-3" />
                 </button>
-
-                {/* Children */}
-                {hasChildren && isExpanded && (
-                  <div className="ml-5 pl-3 border-l border-border-subtle space-y-0.5 mt-0.5">
-                    {folder.children!.map((child) => (
-                      <button
-                        key={child.id}
-                        className={`
-                          w-full flex items-center gap-2 px-2 py-1 rounded-md
-                          text-sm text-text-tertiary
-                          hover:text-text-secondary hover:bg-surface-tertiary/30
-                          transition-colors duration-150 cursor-pointer
-                          bg-transparent border-none text-left
-                        `}
-                      >
-                        <Folder className="size-3.5 shrink-0" />
-                        <span className="truncate">{child.name}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
               </div>
-            );
-          })}
+            ))
+          )}
         </nav>
+
+        {/* Add Folder Button */}
+        <button
+          type="button"
+          onClick={handleAddFolder}
+          disabled={adding}
+          className="mt-1 w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-text-tertiary hover:text-text-secondary hover:bg-surface-tertiary/30 transition-colors duration-150 cursor-pointer bg-transparent border-none text-left disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {adding ? (
+            <Loader2 className="size-4 animate-spin shrink-0" />
+          ) : (
+            <Plus className="size-4 shrink-0" />
+          )}
+          <span>{adding ? 'Selecting...' : 'Add Folder'}</span>
+        </button>
       </div>
 
       {/* Bottom Bar: Sync Status + Settings */}
