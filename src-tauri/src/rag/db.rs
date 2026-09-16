@@ -8,7 +8,7 @@ use lancedb::{connect, connection::Connection, Table};
 /// Initializes the LanceDB connection in the given directory.
 pub async fn init_db(app_data_dir: PathBuf) -> Result<Connection, String> {
     let db_path = app_data_dir.join("vectordb");
-    println!("[MundusAI] Initializing LanceDB at: {:?}", db_path);
+    println!("[Terra] Initializing LanceDB at: {:?}", db_path);
 
     let db_uri = db_path.to_string_lossy().to_string();
     let conn = connect(&db_uri)

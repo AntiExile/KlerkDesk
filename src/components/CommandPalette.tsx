@@ -63,7 +63,7 @@ const QUICK_ACTIONS: QuickAction[] = [
   },
   {
     id: 'ask',
-    title: 'Ask MundusAI',
+    title: 'Ask Terra',
     description: 'Open a free-form query with the local AI engine',
     icon: <Sparkles className="size-4" />,
   },
@@ -99,7 +99,7 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
 
   const handleSelect = useCallback(
     (action: QuickAction) => {
-      console.log(`[MundusAI] Action selected: ${action.title}`);
+      console.log(`[Terra] Action selected: ${action.title}`);
       onClose();
     },
     [onClose]

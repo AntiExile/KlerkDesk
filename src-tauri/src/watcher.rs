@@ -124,26 +124,26 @@ impl WatcherState {
             let mut debouncer = match new_debouncer(Duration::from_secs(2), tx) {
                 Ok(d) => d,
                 Err(e) => {
-                    log::error!("[MundusAI] Failed to create file watcher: {}", e);
+                    log::error!("[Terra] Failed to create file watcher: {}", e);
                     return;
                 }
             };
 
             for path in &paths {
                 if let Err(e) = debouncer.watcher().watch(path, RecursiveMode::Recursive) {
-                    log::error!("[MundusAI] Failed to watch {}: {}", path.display(), e);
+                    log::error!("[Terra] Failed to watch {}: {}", path.display(), e);
                 }
             }
 
             log::info!(
-                "[MundusAI] Watching {} folder(s) for changes",
+                "[Terra] Watching {} folder(s) for changes",
                 paths.len()
             );
 
             loop {
                 // Check for stop signal (non-blocking)
                 if stop_rx.try_recv().is_ok() {
-                    log::info!("[MundusAI] Watcher stopped");
+                    log::info!("[Terra] Watcher stopped");
                     break;
                 }
 
@@ -163,10 +163,10 @@ impl WatcherState {
                             };
 
                             if let Err(e) =
-                                app_handle.emit("mundusai://fs-change", &event)
+                                app_handle.emit("terra://fs-change", &event)
                             {
                                 log::error!(
-                                    "[MundusAI] Failed to emit fs-change event: {}",
+                                    "[Terra] Failed to emit fs-change event: {}",
                                     e
                                 );
                             }
@@ -186,20 +186,20 @@ impl WatcherState {
 
                                 tauri::async_runtime::spawn(async move {
                                     if let Err(e) = crate::rag::ingest::process_file(&path, &embedder, &db_conn).await {
-                                        log::error!("[MundusAI] Failed to ingest {:?}: {}", path, e);
+                                        log::error!("[Terra] Failed to ingest {:?}: {}", path, e);
                                     }
                                 });
                             }
                         }
                     }
                     Ok(Err(e)) => {
-                        log::error!("[MundusAI] Watcher error: {:?}", e);
+                        log::error!("[Terra] Watcher error: {:?}", e);
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {
                         // Normal timeout, loop continues
                     }
                     Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        log::info!("[MundusAI] Watcher channel disconnected");
+                        log::info!("[Terra] Watcher channel disconnected");
                         break;
                     }
                 }

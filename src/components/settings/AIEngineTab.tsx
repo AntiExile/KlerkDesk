@@ -76,7 +76,7 @@ export function AIEngineTab() {
         }
       }
     } catch (e) {
-      console.error('[MundusAI] Failed to pick folder:', e);
+      console.error('[Terra] Failed to pick folder:', e);
     }
   };
 
@@ -86,7 +86,7 @@ export function AIEngineTab() {
       const success = await invoke<boolean>('test_connection');
       setEngineConnected(success);
     } catch (e) {
-      console.error('[MundusAI] Connection test failed:', e);
+      console.error('[Terra] Connection test failed:', e);
       setEngineConnected(false);
     } finally {
       setIsTesting(false);
@@ -121,10 +121,10 @@ export function AIEngineTab() {
       }
       
       // Gave up after 90s
-      console.error('[MundusAI] Engine did not start after 90s');
+      console.error('[Terra] Engine did not start after 90s');
       setEngineConnected(false);
     } catch (e) {
-      console.error('[MundusAI] Failed to restart engine:', e);
+      console.error('[Terra] Failed to restart engine:', e);
     } finally {
       setIsRestarting(false);
     }
@@ -245,7 +245,7 @@ export function AIEngineTab() {
               </div>
               <div className="text-xs text-text-tertiary">
                 {engineConnected
-                  ? 'MundusAI Inference Engine · Ready'
+                  ? 'Terra Inference Engine · Ready'
                   : isRestarting
                   ? 'Loading model weights — this may take a minute'
                   : 'Start the local inference engine to begin'}

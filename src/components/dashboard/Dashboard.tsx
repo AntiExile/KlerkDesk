@@ -84,7 +84,7 @@ export function Dashboard({ onOpenSettings }: DashboardProps) {
           setLoaded(true);
         }
       } catch (err) {
-        console.error('[MundusAI] Failed to load conversations:', err);
+        console.error('[Terra] Failed to load conversations:', err);
         if (!cancelled) {
           const first = createNewConversation();
           setConversations([first]);
@@ -109,7 +109,7 @@ export function Dashboard({ onOpenSettings }: DashboardProps) {
         await store.set('activeConversationId', activeId);
         await store.save();
       } catch (err) {
-        console.error('[MundusAI] Failed to save conversations:', err);
+        console.error('[Terra] Failed to save conversations:', err);
       }
     }, 500);
   }, []);
@@ -178,7 +178,7 @@ export function Dashboard({ onOpenSettings }: DashboardProps) {
           const thinkingMsg = convoToDelete.messages.find((m) => m.isThinking);
           if (thinkingMsg) {
             invoke('cancel_question', { messageId: thinkingMsg.id }).catch((err) =>
-              console.error('[MundusAI] Failed to cancel deleted query:', err)
+              console.error('[Terra] Failed to cancel deleted query:', err)
             );
           }
         }

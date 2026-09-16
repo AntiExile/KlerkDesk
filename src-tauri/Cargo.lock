@@ -5497,37 +5497,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
-name = "mundusai"
-version = "0.1.0"
-dependencies = [
- "candle-core",
- "candle-nn",
- "candle-transformers",
- "chrono",
- "futures",
- "hf-hub",
- "lancedb",
- "log",
- "notify",
- "notify-debouncer-mini",
- "pdf-extract",
- "reqwest 0.11.27",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-opener",
- "tauri-plugin-shell",
- "tauri-plugin-store",
- "text-splitter",
- "tokenizers 0.23.2",
- "tokio",
- "uuid",
- "walkdir",
-]
-
-[[package]]
 name = "munge"
 version = "0.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8583,6 +8552,37 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5fed54709c5b3a53d09bb1c113ea4f5ceafd1e772ddcb0030a82e1d56c087b08"
 dependencies = [
  "new_debug_unreachable",
+]
+
+[[package]]
+name = "terra"
+version = "0.1.0"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "candle-transformers",
+ "chrono",
+ "futures",
+ "hf-hub",
+ "lancedb",
+ "log",
+ "notify",
+ "notify-debouncer-mini",
+ "pdf-extract",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-opener",
+ "tauri-plugin-shell",
+ "tauri-plugin-store",
+ "text-splitter",
+ "tokenizers 0.23.2",
+ "tokio",
+ "uuid",
+ "walkdir",
 ]
 
 [[package]]

@@ -143,7 +143,7 @@ export function ChatArea({
         onMessagesChange((prev) =>
           prev.map((msg) =>
             msg.id === aiMessageId
-              ? { ...msg, content: `**Error querying MundusAI**: ${error}`, isThinking: false }
+              ? { ...msg, content: `**Error querying Terra**: ${error}`, isThinking: false }
               : msg
           )
         );
@@ -158,7 +158,7 @@ export function ChatArea({
       try {
         await invoke('cancel_question', { messageId: thinkingMsg.id });
       } catch (err) {
-        console.error('[MundusAI] Failed to cancel question:', err);
+        console.error('[Terra] Failed to cancel question:', err);
       }
     }
   };
@@ -210,7 +210,7 @@ export function ChatArea({
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full py-20 text-center">
               <div className="size-12 rounded-2xl bg-gradient-to-br from-accent-400/20 to-accent-600/20 flex items-center justify-center mb-4">
-                <span className="text-accent-400 text-xl font-bold">M</span>
+                <span className="text-accent-400 text-xl font-bold">T</span>
               </div>
               <h2 className="text-base font-medium text-text-primary mb-1">
                 How can I help you today?
@@ -254,7 +254,7 @@ export function ChatArea({
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               onInput={handleInput}
-              placeholder="Ask MundusAI anything..."
+              placeholder="Ask Terra anything..."
               rows={1}
               className={`
                 flex-1 resize-none bg-transparent border-none outline-none
@@ -293,7 +293,7 @@ export function ChatArea({
           </div>
 
           <p className="text-[10px] text-text-tertiary/50 text-center mt-2">
-            MundusAI runs locally — your data never leaves your machine
+            Terra runs locally — your data never leaves your machine
           </p>
         </div>
       </div>

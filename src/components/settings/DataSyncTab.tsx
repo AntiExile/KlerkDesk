@@ -26,7 +26,7 @@ export function DataSyncTab() {
       setFolders(folderList);
       setTotalCount(count);
     } catch (err) {
-      console.error('[MundusAI] Failed to fetch folders:', err);
+      console.error('[Terra] Failed to fetch folders:', err);
     } finally {
       setLoading(false);
     }
@@ -39,7 +39,7 @@ export function DataSyncTab() {
 
   // Listen for FS change events and refresh counts
   useEffect(() => {
-    const unlisten = listen('mundusai://fs-change', () => {
+    const unlisten = listen('terra://fs-change', () => {
       refreshData();
     });
     return () => {
@@ -56,7 +56,7 @@ export function DataSyncTab() {
         await refreshData();
       }
     } catch (err) {
-      console.error('[MundusAI] Failed to add folder:', err);
+      console.error('[Terra] Failed to add folder:', err);
     } finally {
       setAdding(false);
     }
@@ -67,7 +67,7 @@ export function DataSyncTab() {
       await invoke('remove_watched_folder', { id });
       await refreshData();
     } catch (err) {
-      console.error('[MundusAI] Failed to remove folder:', err);
+      console.error('[Terra] Failed to remove folder:', err);
     }
   };
 
@@ -87,7 +87,7 @@ export function DataSyncTab() {
           Watched Folders
         </h3>
         <p className="text-xs text-text-tertiary mt-1">
-          MundusAI monitors these folders and indexes documents into the local
+          Terra monitors these folders and indexes documents into the local
           vector database for retrieval.
         </p>
       </div>

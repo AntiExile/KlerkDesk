@@ -47,7 +47,7 @@ pub async fn process_file(
         return Ok(());
     }
 
-    println!("[MundusAI] Embedding {} chunks for {:?}", chunks.len(), file_path);
+    println!("[Terra] Embedding {} chunks for {:?}", chunks.len(), file_path);
 
     // Embed the chunks
     // We can batch this, but for now we'll do it in chunks of 32 to avoid massive memory spikes
@@ -105,7 +105,7 @@ pub async fn process_file(
     ).map_err(|e| e.to_string())?;
 
     // Insert into table
-    println!("[MundusAI] Inserting into LanceDB...");
+    println!("[Terra] Inserting into LanceDB...");
     let table = super::db::get_or_create_table(db_conn).await?;
     
     // In lancedb 0.38, add takes a Boxed RecordBatchReader or an iterator
@@ -118,6 +118,6 @@ pub async fn process_file(
         .await
         .map_err(|e| format!("Failed to insert into LanceDB: {}", e))?;
 
-    println!("[MundusAI] Successfully indexed {:?}", file_path);
+    println!("[Terra] Successfully indexed {:?}", file_path);
     Ok(())
 }

@@ -15,20 +15,20 @@ pub struct Embedder {
 impl Embedder {
     pub async fn new(app_data_dir: PathBuf) -> Result<Self, String> {
         let cache_dir = app_data_dir.join("hf_cache");
-        println!("[MundusAI] HF Cache Dir (for air-gapped preload): {:?}", cache_dir);
+        println!("[Terra] HF Cache Dir (for air-gapped preload): {:?}", cache_dir);
         std::fs::create_dir_all(&cache_dir).map_err(|e| format!("Failed to create cache dir: {}", e))?;
 
         let repo_url = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main";
 
-        println!("[MundusAI] Loading tokenizer...");
+        println!("[Terra] Loading tokenizer...");
         let tokenizer_filename = cache_dir.join("tokenizer.json");
         Self::download_file(&format!("{}/tokenizer.json", repo_url), &tokenizer_filename).await?;
         
-        println!("[MundusAI] Loading config...");
+        println!("[Terra] Loading config...");
         let config_filename = cache_dir.join("config.json");
         Self::download_file(&format!("{}/config.json", repo_url), &config_filename).await?;
             
-        println!("[MundusAI] Loading model weights...");
+        println!("[Terra] Loading model weights...");
         let weights_filename = cache_dir.join("model.safetensors");
         Self::download_file(&format!("{}/model.safetensors", repo_url), &weights_filename).await?;
 

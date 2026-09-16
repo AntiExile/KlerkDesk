@@ -28,7 +28,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         {/* Avatar */}
         {!isUser && (
           <div className="shrink-0 size-7 rounded-lg bg-accent-600/20 flex items-center justify-center mt-0.5">
-            <span className="text-accent-400 text-xs font-bold">M</span>
+            <span className="text-accent-400 text-xs font-bold">T</span>
           </div>
         )}
 

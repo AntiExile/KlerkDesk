@@ -115,7 +115,7 @@ pub fn run() {
 
                     match command.spawn() {
                         Ok((mut rx, child)) => {
-                            println!("[MundusAI] Spawned colibri-server sidecar on port 14205");
+                            println!("[Terra] Spawned colibri-server sidecar on port 14205");
                             if let Ok(mut child_lock) = app.state::<EngineState>().child.lock() {
                                 *child_lock = Some(child);
                             }
@@ -143,12 +143,12 @@ pub fn run() {
                             });
                         }
                         Err(e) => {
-                            eprintln!("[MundusAI] Failed to spawn colibri-server sidecar: {}", e);
+                            eprintln!("[Terra] Failed to spawn colibri-server sidecar: {}", e);
                         }
                     }
                 }
                 Err(e) => {
-                    eprintln!("[MundusAI] Failed to create sidecar command: {}", e);
+                    eprintln!("[Terra] Failed to create sidecar command: {}", e);
                 }
             }
 

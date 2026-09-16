@@ -52,7 +52,7 @@ pub fn add_watched_folder(
     let folder_path = folder.path.clone();
 
     tauri::async_runtime::spawn(async move {
-        println!("[MundusAI] Starting initial sync for {:?}", folder_path);
+        println!("[Terra] Starting initial sync for {:?}", folder_path);
         let files = watcher::list_files(&folder_path);
         for file in files {
             let path_buf = std::path::PathBuf::from(&file.path);
@@ -65,11 +65,11 @@ pub fn add_watched_folder(
                 if let Err(e) =
                     crate::rag::ingest::process_file(&path_buf, &embedder_clone, &conn_clone).await
                 {
-                    log::error!("[MundusAI] Initial sync failed for {:?}: {}", path_buf, e);
+                    log::error!("[Terra] Initial sync failed for {:?}: {}", path_buf, e);
                 }
             }
         }
-        println!("[MundusAI] Initial sync completed for {:?}", folder_path);
+        println!("[Terra] Initial sync completed for {:?}", folder_path);
     });
 
     Ok(WatchedFolderInfo {
@@ -152,7 +152,7 @@ pub fn cancel_question(message_id: String, query_state: tauri::State<'_, crate::
     let mut active = query_state.active_queries.lock().unwrap();
     if let Some(tx) = active.remove(&message_id) {
         let _ = tx.send(());
-        println!("[MundusAI] Cancelled question {}", message_id);
+        println!("[Terra] Cancelled question {}", message_id);
     }
 }
 
@@ -199,7 +199,7 @@ pub async fn ask_question(
             })
             .collect();
         let filter = clauses.join(" OR ");
-        println!("[MundusAI] Applying folder filter: {}", filter);
+        println!("[Terra] Applying folder filter: {}", filter);
         query = query.only_if(filter);
     }
 
@@ -207,7 +207,7 @@ pub async fn ask_question(
     let mut results = tokio::select! {
         res = execute_future => res.map_err(|e| format!("Execute error: {}", e))?,
         _ = &mut rx => {
-            println!("[MundusAI] Query cancelled during vector search");
+            println!("[Terra] Query cancelled during vector search");
             let mut active = query_state.active_queries.lock().unwrap();
             active.remove(&message_id);
             return Ok(());
@@ -260,7 +260,7 @@ pub async fn ask_question(
     }
 
     println!(
-        "[MundusAI] Retrieved {} candidates, applying MMR selection...",
+        "[Terra] Retrieved {} candidates, applying MMR selection...",
         candidates.len()
     );
 
@@ -268,7 +268,7 @@ pub async fn ask_question(
     let selected = crate::rag::mmr::select_mmr(&vector, candidates, 20, 0.7, 5);
 
     println!(
-        "[MundusAI] MMR selected {} chunks from {} distinct files",
+        "[Terra] MMR selected {} chunks from {} distinct files",
         selected.len(),
         selected
             .iter()
@@ -297,14 +297,14 @@ pub async fn ask_question(
             sources,
         },
     ) {
-        log::error!("[MundusAI] Failed to emit chat-sources: {}", e);
+        log::error!("[Terra] Failed to emit chat-sources: {}", e);
     }
 
     let context_str = context_chunks.join("\n\n---\n\n");
     let full_prompt = format!("Context:\n{}\n\nQuestion: {}", context_str, prompt);
 
     println!(
-        "[MundusAI] Querying sidecar with prompt length: {}",
+        "[Terra] Querying sidecar with prompt length: {}",
         full_prompt.len()
     );
 
@@ -324,7 +324,7 @@ pub async fn ask_question(
     let payload = serde_json::json!({
         "model": model_id,
         "messages": [
-            { "role": "system", "content": "You are MundusAI, a helpful local assistant. Answer based ONLY on the provided context." },
+            { "role": "system", "content": "You are Terra, a helpful local assistant. Answer based ONLY on the provided context." },
             { "role": "user", "content": full_prompt }
         ],
         "stream": true
@@ -338,21 +338,21 @@ pub async fn ask_question(
     let mut res = tokio::select! {
         res = post_future => res.map_err(|e| format!("Request to sidecar failed: {}", e))?,
         _ = &mut rx => {
-            println!("[MundusAI] Query cancelled during sidecar request");
+            println!("[Terra] Query cancelled during sidecar request");
             let mut active = query_state.active_queries.lock().unwrap();
             active.remove(&message_id);
             return Ok(());
         }
     };
 
-    println!("[MundusAI] Sidecar response status: {}", res.status());
+    println!("[Terra] Sidecar response status: {}", res.status());
 
     // 4. Read SSE Stream
     loop {
         let chunk_opt = tokio::select! {
             chunk_opt = res.chunk() => chunk_opt.map_err(|e| format!("Stream error: {}", e))?,
             _ = &mut rx => {
-                println!("[MundusAI] Stream cancelled by user");
+                println!("[Terra] Stream cancelled by user");
                 break;
             }
         };
@@ -361,7 +361,7 @@ pub async fn ask_question(
             Some(chunk) => {
                 let chunk_str = String::from_utf8_lossy(&chunk);
                 println!(
-                    "[MundusAI] Raw chunk: {}",
+                    "[Terra] Raw chunk: {}",
                     &chunk_str[..chunk_str.len().min(200)]
                 );
 
@@ -401,7 +401,7 @@ pub async fn ask_question(
                                         token: text_to_emit,
                                     },
                                 ) {
-                                    log::error!("[MundusAI] Failed to emit chat-token: {}", e);
+                                    log::error!("[Terra] Failed to emit chat-token: {}", e);
                                 }
                             }
                         }
@@ -489,7 +489,7 @@ pub async fn restart_engine(
 
             match command.spawn() {
                 Ok((mut rx, child)) => {
-                    println!("[MundusAI] Restarted colibri-server sidecar on port 14205");
+                    println!("[Terra] Restarted colibri-server sidecar on port 14205");
                     if let Ok(mut child_lock) = engine_state.child.lock() {
                         *child_lock = Some(child);
                     }

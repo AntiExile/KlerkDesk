@@ -92,14 +92,14 @@ export function Sidebar({
       setFolders(folderList);
       setDocCount(count);
     } catch (err) {
-      console.error('[MundusAI] Failed to refresh sidebar data:', err);
+      console.error('[Terra] Failed to refresh sidebar data:', err);
     }
   }, []);
 
   useEffect(() => { refreshData(); }, [refreshData]);
 
   useEffect(() => {
-    const unlisten = listen('mundusai://fs-change', () => {
+    const unlisten = listen('terra://fs-change', () => {
       setSyncStatus('indexing');
       refreshData().then(() => {
         setTimeout(() => setSyncStatus('synced'), 1500);
@@ -117,7 +117,7 @@ export function Sidebar({
         await refreshData();
       }
     } catch (err) {
-      console.error('[MundusAI] Failed to add folder:', err);
+      console.error('[Terra] Failed to add folder:', err);
     } finally {
       setAdding(false);
     }
@@ -130,7 +130,7 @@ export function Sidebar({
       onFolderRemoved(path);
       await refreshData();
     } catch (err) {
-      console.error('[MundusAI] Failed to remove folder:', err);
+      console.error('[Terra] Failed to remove folder:', err);
     }
   };
 
@@ -167,10 +167,10 @@ export function Sidebar({
       <div className="h-12 flex items-center justify-between px-4 border-b border-border-subtle drag-region">
         <div className="flex items-center gap-2.5 no-drag">
           <div className="size-6 rounded-lg bg-gradient-to-br from-accent-400 to-accent-600 flex items-center justify-center">
-            <span className="text-white text-xs font-bold">M</span>
+            <span className="text-white text-xs font-bold">T</span>
           </div>
           <span className="text-sm font-semibold text-text-primary tracking-tight">
-            MundusAI
+            Terra
           </span>
         </div>
         <div className="no-drag">

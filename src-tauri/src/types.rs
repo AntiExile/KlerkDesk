@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// A folder being watched by MundusAI.
+/// A folder being watched by Terra.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatchedFolder {
     pub id: String,

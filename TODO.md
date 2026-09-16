@@ -1,4 +1,4 @@
-# MundusAI - Remaining Project Tasks
+# Terra - Remaining Project Tasks
 
 This is a comprehensive list of what is left to build and polish before the application is ready for production deployment to B2B clients.
 
@@ -19,7 +19,7 @@ This is a comprehensive list of what is left to build and polish before the appl
 - [ ] **Error Handling UI**: Add toast notifications or error banners in the chat window if the local Colibrì engine crashes or goes out of memory.
 
 ## 4. Production & Deployment
-- [ ] **App Icons**: Replace the default Tauri icons in `src-tauri/icons/` with the official MundusAI branding.
+- [ ] **App Icons**: Replace the default Tauri icons in `src-tauri/icons/` with the official Terra branding.
 - [ ] **Code Signing**: Configure Apple Developer certificates and Windows Authenticode signing so clients don't get "Untrusted Developer" warnings.
 - [ ] **Final Build Test**: Run `npm run tauri build` and verify the final `.app` (Mac) and `.msi`/`.exe` (Windows) bundle sizes and ensure the NVMe streaming works cleanly in the packaged environment.
 
