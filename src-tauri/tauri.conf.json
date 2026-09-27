@@ -25,6 +25,9 @@
   },
   "bundle": {
     "externalBin": ["bin/colibri-server"],
+    "resources": [
+      "resources/**/*"
+    ],
     "active": true,
     "targets": "all",
     "icon": [

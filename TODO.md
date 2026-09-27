@@ -13,10 +13,11 @@ This document tracks all remaining tasks, bug fixes, and architectural requireme
 - [x] **Remove Hardcoded Local Machine Paths in Sidecar Launcher**:
   - `src-tauri/bin/colibri-server-aarch64-apple-darwin` hardcodes paths to `/Users/wianmarais/Downloads/...` and `/Users/wianmarais/work/...`.
   - Package the Colibrì engine binary into Tauri app resources (`bundle.resources`) or resolve paths dynamically via the standard OS app data directory (`app.path().app_data_dir()`).
-- [ ] **Air-Gapped & Offline Embedding Model Bundling**:
-  - In `src-tauri/src/rag/embed.rs`, `Embedder::new` downloads `tokenizer.json`, `config.json`, and `model.safetensors` (~90 MB) from Hugging Face on startup.
-  - If a client runs offline or behind an enterprise proxy/firewall, startup panics and crashes the application on boot (`lib.rs`).
-  - Pre-package the embedding model files into bundle resources and load them locally.
+- [x] **Air-Gapped & Offline Embedding Model Bundling**:
+  - Pre-packaged the `all-MiniLM-L6-v2` embedding model weights (`tokenizer.json`, `config.json`, `model.safetensors` ~88 MB) into `src-tauri/resources/embedding_model/` and configured `"resources": ["resources/**/*"]` in `tauri.conf.json`.
+  - Refactored `Embedder::new` in `src-tauri/src/rag/embed.rs` with a resilient multi-tier local search hierarchy (`TERRA_EMBEDDING_MODEL_DIR`, app bundle resources, app data directory, local dev paths, and `hf_cache`) before ever touching the network.
+  - Added unit test `test_offline_embedder_local_load` verifying local loading without network access.
+  - Network download is now only used as a fallback if all local resources are absent, with clear, actionable error reporting for air-gapped deployments.
 - [ ] **Cross-Platform Process Cleanup**:
   - In `src-tauri/src/lib.rs` and `package.json`, process termination uses `sh -c "lsof -ti :14205 | xargs kill -9 2>/dev/null"`, which fails on Windows.
   - Replace with cross-platform port checking and process management in Rust (e.g. tracking child PID or cross-platform socket verification).

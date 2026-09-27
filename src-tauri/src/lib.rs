@@ -75,6 +75,7 @@ pub fn run() {
             // RAG Initialization
             let app_data_dir = app.path().app_data_dir().expect("Failed to get app data dir");
             std::fs::create_dir_all(&app_data_dir).expect("Failed to create app data dir");
+            let resource_dir = app.path().resource_dir().unwrap_or_else(|_| app_data_dir.clone());
 
             // Block on async DB init and Embedder init
             let (conn, embedder) = tauri::async_runtime::block_on(async {
@@ -82,7 +83,7 @@ pub fn run() {
                     .await
                     .expect("Failed to init LanceDB");
                     
-                let embedder = rag::embed::Embedder::new(app_data_dir.clone())
+                let embedder = rag::embed::Embedder::new(app_data_dir.clone(), Some(&resource_dir))
                     .await
                     .expect("Failed to init Embedder");
                     
@@ -111,8 +112,6 @@ pub fn run() {
                     custom_model = val.as_str().unwrap_or("").to_string();
                 }
             }
-
-            let resource_dir = app.path().resource_dir().unwrap_or_else(|_| app_data_dir.clone());
 
             match app.shell().sidecar("colibri-server") {
                 Ok(mut command) => {
