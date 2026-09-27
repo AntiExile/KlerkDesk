@@ -36,7 +36,7 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 /// repetitive boilerplate.
 pub fn select_mmr(
     query_vec: &[f32],
-    mut candidates: Vec<CandidateChunk>,
+    candidates: Vec<CandidateChunk>,
     k: usize,
     lambda: f32,
     max_per_file: usize,
@@ -106,25 +106,14 @@ pub fn select_mmr(
         }
     }
 
-    // Sort selected indices so we can drain from `candidates` without index
-    // invalidation. We drain in reverse order.
-    selected_indices.sort_unstable();
+    // Extract the selected candidates in their exact selection order without
+    // index invalidation.
+    let mut candidates: Vec<Option<CandidateChunk>> =
+        candidates.into_iter().map(Some).collect();
 
-    // Extract the selected candidates, preserving their MMR-chosen order.
-    // We first collect them into a map keyed by original index, then rebuild
-    // the output in selection order.
-    let selection_order: Vec<usize> = selected_indices.clone();
-
-    // Pull out selected candidates by draining from the back
-    let mut extracted: HashMap<usize, CandidateChunk> = HashMap::with_capacity(k);
-    for &idx in selected_indices.iter().rev() {
-        extracted.insert(idx, candidates.swap_remove(idx));
-    }
-
-    // Return in the order they were selected by MMR (most relevant first)
-    selection_order
+    selected_indices
         .into_iter()
-        .filter_map(|idx| extracted.remove(&idx))
+        .filter_map(|idx| candidates[idx].take())
         .collect()
 }
 
@@ -169,12 +158,26 @@ mod tests {
         let c4 = make_candidate("chunk4", "/file_b.pdf", vec![0.7, 0.5, 0.5]);
 
         let candidates = vec![c1, c2, c3, c4];
-        let selected = select_mmr(&query, candidates, 3, 0.7, 5);
+        // Using lambda = 0.3 to emphasize diversity over redundancy
+        let selected = select_mmr(&query, candidates, 3, 0.3, 5);
 
         // All 3 should be selected, and the diverse one from file_b should appear
         assert_eq!(selected.len(), 3);
         let paths: Vec<&str> = selected.iter().map(|c| c.file_path.as_str()).collect();
         assert!(paths.contains(&"/file_b.pdf"), "MMR should include the diverse candidate");
+    }
+
+    #[test]
+    fn test_mmr_selection_order_preserved() {
+        let query = vec![1.0, 0.0, 0.0];
+        let c1 = make_candidate("best", "/file_a.pdf", vec![0.99, 0.0, 0.0]);
+        let c2 = make_candidate("second", "/file_b.pdf", vec![0.8, 0.6, 0.0]);
+        let candidates = vec![c1, c2];
+
+        let selected = select_mmr(&query, candidates, 2, 0.7, 5);
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0].text, "best");
+        assert_eq!(selected[1].text, "second");
     }
 
     #[test]
