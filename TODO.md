@@ -18,9 +18,12 @@ This document tracks all remaining tasks, bug fixes, and architectural requireme
   - Refactored `Embedder::new` in `src-tauri/src/rag/embed.rs` with a resilient multi-tier local search hierarchy (`TERRA_EMBEDDING_MODEL_DIR`, app bundle resources, app data directory, local dev paths, and `hf_cache`) before ever touching the network.
   - Added unit test `test_offline_embedder_local_load` verifying local loading without network access.
   - Network download is now only used as a fallback if all local resources are absent, with clear, actionable error reporting for air-gapped deployments.
-- [ ] **Cross-Platform Process Cleanup**:
-  - In `src-tauri/src/lib.rs` and `package.json`, process termination uses `sh -c "lsof -ti :14205 | xargs kill -9 2>/dev/null"`, which fails on Windows.
-  - Replace with cross-platform port checking and process management in Rust (e.g. tracking child PID or cross-platform socket verification).
+- [x] **Cross-Platform Process Cleanup**:
+  - Implemented cross-platform port and process management in `src-tauri/src/process.rs` (`is_port_in_use`, `wait_for_port_free`, and `kill_process_on_port`).
+  - Added Windows support via PowerShell `Get-NetTCPConnection` / `Stop-Process` and native Unix PID inspection without shell wrapper vulnerabilities.
+  - Added application lifecycle hook in `src-tauri/src/lib.rs` to terminate sidecar processes cleanly when the application exits or receives close requests.
+  - Replaced `package.json`'s Unix-only `kill-engine` script with a cross-platform script (`scripts/kill-engine.cjs`).
+  - Added unit tests `test_is_port_in_use_on_free_port` and `test_is_port_in_use_on_active_port`.
 
 ---
 

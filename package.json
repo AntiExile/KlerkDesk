@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "clean": "cd src-tauri && cargo clean && cd ..",
-    "kill-engine": "lsof -ti :14205 | xargs kill -9 2>/dev/null; echo 'Port 14205 cleared'"
+    "kill-engine": "node scripts/kill-engine.cjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",

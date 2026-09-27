@@ -519,8 +519,9 @@ pub async fn restart_engine(
         }
     }
 
-    // Give the OS a moment to free the port
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    // Ensure port is completely freed (cross-platform orphan cleanup and poll)
+    crate::process::kill_process_on_port(14205);
+    let _ = crate::process::wait_for_port_free(14205, std::time::Duration::from_millis(2000));
 
     // 2. Spawn the new one
     use tauri::Manager;

@@ -1,4 +1,5 @@
 mod commands;
+mod process;
 mod rag;
 mod types;
 mod watcher;
@@ -94,10 +95,9 @@ pub fn run() {
             app.manage(Arc::new(conn));
             app.manage(Arc::new(embedder));
 
-            // Kill any orphaned process on port 14205 from a previous run
-            let _ = std::process::Command::new("sh")
-                .args(["-c", "lsof -ti :14205 | xargs kill -9 2>/dev/null"])
-                .output();
+            // Kill any orphaned process on port 14205 from a previous run (cross-platform)
+            process::kill_process_on_port(14205);
+            let _ = process::wait_for_port_free(14205, std::time::Duration::from_millis(1500));
 
             // Spawn Colibri Sidecar
             let store = app.store("settings.json");
@@ -167,6 +167,18 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
+                println!("[Terra] Application exiting, terminating sidecar process...");
+                if let Ok(mut child_lock) = app_handle.state::<EngineState>().child.lock() {
+                    if let Some(child) = child_lock.take() {
+                        let _ = child.kill();
+                    }
+                }
+                // Ensure port 14205 is freed across platforms
+                process::kill_process_on_port(14205);
+            }
+        });
 }
