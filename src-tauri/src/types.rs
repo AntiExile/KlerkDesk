@@ -38,3 +38,26 @@ pub struct FsChangeEvent {
     pub event_type: String,
     pub paths: Vec<String>,
 }
+
+/// Status of the local AI model for engine execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelStatusInfo {
+    pub has_model: bool,
+    pub model_path: Option<String>,
+    pub model_name: Option<String>,
+    pub is_default: bool,
+    pub default_model_path: String,
+}
+
+/// Progress event emitted while downloading model files.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelDownloadProgress {
+    pub status: String, // "downloading" | "verifying" | "completed" | "error" | "cancelled"
+    pub current_file: String,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+    pub percentage: f32,
+    pub error_message: Option<String>,
+}

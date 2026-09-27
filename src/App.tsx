@@ -1,11 +1,28 @@
 import { useState, useEffect, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { Dashboard } from '@/components/dashboard/Dashboard';
 import { CommandPalette } from '@/components/CommandPalette';
 import { SettingsModal } from '@/components/settings/SettingsModal';
+import { ModelSetupModal } from '@/components/ModelSetupModal';
+import type { ModelStatusInfo } from '@/types';
 
 function App() {
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isModelSetupOpen, setIsModelSetupOpen] = useState(false);
+
+  // Check on boot if a model is present; if not, open initial setup modal
+  useEffect(() => {
+    invoke<ModelStatusInfo>('check_model_status')
+      .then((status) => {
+        if (!status.hasModel) {
+          setIsModelSetupOpen(true);
+        }
+      })
+      .catch((err) => {
+        console.error('[Terra] Failed to check model status:', err);
+      });
+  }, []);
 
   const handleKeyDown = useCallback(
     (e: globalThis.KeyboardEvent) => {
@@ -41,6 +58,13 @@ function App() {
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
+        onOpenModelSetup={() => setIsModelSetupOpen(true)}
+      />
+
+      <ModelSetupModal
+        isOpen={isModelSetupOpen}
+        onClose={() => setIsModelSetupOpen(false)}
+        isMandatory={false}
       />
     </>
   );

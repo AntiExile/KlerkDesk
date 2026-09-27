@@ -10,7 +10,7 @@ This document tracks all remaining tasks, bug fixes, and architectural requireme
   - In `src-tauri/src/rag/mmr.rs`, `candidates.swap_remove(idx)` invalidates vector indices while draining in a loop, corrupting selected candidates.
   - Fix by transforming candidates into `Vec<Option<CandidateChunk>>` and using `candidates[idx].take()` by selection order.
   - Resolve the failing unit test `rag::mmr::tests::test_mmr_diversity` (balance $\lambda$ vs. per-file caps so diverse candidates are correctly verified).
-- [ ] **Remove Hardcoded Local Machine Paths in Sidecar Launcher**:
+- [x] **Remove Hardcoded Local Machine Paths in Sidecar Launcher**:
   - `src-tauri/bin/colibri-server-aarch64-apple-darwin` hardcodes paths to `/Users/wianmarais/Downloads/...` and `/Users/wianmarais/work/...`.
   - Package the Colibrì engine binary into Tauri app resources (`bundle.resources`) or resolve paths dynamically via the standard OS app data directory (`app.path().app_data_dir()`).
 - [ ] **Air-Gapped & Offline Embedding Model Bundling**:
@@ -25,6 +25,11 @@ This document tracks all remaining tasks, bug fixes, and architectural requireme
 
 ## 1. Engine & AI Sidecar Integration
 
+- [x] **Hybrid Model Onboarding & Management**:
+  - Implemented backend detection (`check_model_status`) checking default app data, settings, env variables, and local fallbacks.
+  - Implemented in-app model downloader (`download_default_model`) with chunked stream writing, cancellation support, and live progress events.
+  - Implemented managed/enterprise folder importer (`set_model_folder`) supporting in-place linking or copying into application storage.
+  - Built `ModelSetupModal` onboarding wizard automatically triggered on first launch if no model is detected, plus active status card in `AIEngineTab`.
 - [ ] **Windows Executable Sidecar**:
   - Build and package the standalone Windows binary (`colibri-server-x86_64-pc-windows-msvc.exe`) or PyInstaller standalone build so Windows clients do not require a Python runtime.
 - [ ] **Intel Mac Support**:
@@ -93,3 +98,4 @@ This document tracks all remaining tasks, bug fixes, and architectural requireme
 - [x] **MMR Reranking Module**: Diversity calculation with per-file candidate caps implemented in `src-tauri/src/rag/mmr.rs`.
 - [x] **Filesystem Watcher Hookup**: `notify-debouncer-mini` watcher configured to auto-trigger document ingestion on detected filesystem changes.
 - [x] **AI Engine Settings Tab**: Connection testing, custom model path picker, and live sidecar log terminal stream.
+- [x] **Hybrid Model Onboarding & Management**: First-run setup modal, managed USB/directory import, in-app model downloader, and live status badge.

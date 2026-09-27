@@ -19,6 +19,10 @@ pub struct QueryState {
     pub active_queries: Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>,
 }
 
+pub struct DownloadState {
+    pub cancel_tx: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -28,6 +32,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .manage(Mutex::new(WatcherState::new()))
         .manage(EngineState { child: Mutex::new(None) })
+        .manage(DownloadState { cancel_tx: Mutex::new(None) })
         .invoke_handler(tauri::generate_handler![
             commands::pick_folder,
             commands::add_watched_folder,
@@ -40,6 +45,10 @@ pub fn run() {
             commands::pick_model_folder,
             commands::test_connection,
             commands::restart_engine,
+            commands::check_model_status,
+            commands::set_model_folder,
+            commands::download_default_model,
+            commands::cancel_model_download,
         ])
         .manage(QueryState {
             active_queries: Mutex::new(std::collections::HashMap::new()),
@@ -73,7 +82,7 @@ pub fn run() {
                     .await
                     .expect("Failed to init LanceDB");
                     
-                let embedder = rag::embed::Embedder::new(app_data_dir)
+                let embedder = rag::embed::Embedder::new(app_data_dir.clone())
                     .await
                     .expect("Failed to init Embedder");
                     
@@ -103,9 +112,14 @@ pub fn run() {
                 }
             }
 
+            let resource_dir = app.path().resource_dir().unwrap_or_else(|_| app_data_dir.clone());
+
             match app.shell().sidecar("colibri-server") {
                 Ok(mut command) => {
-                    command = command.args(["--port", "14205"]);
+                    command = command
+                        .args(["--port", "14205"])
+                        .env("TERRA_APP_DATA_DIR", app_data_dir.to_string_lossy().to_string())
+                        .env("TERRA_RESOURCE_DIR", resource_dir.to_string_lossy().to_string());
                     
                     if !use_default && !custom_model.is_empty() {
                         command = command.args([

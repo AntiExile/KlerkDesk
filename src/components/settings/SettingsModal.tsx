@@ -7,6 +7,7 @@ import { AIEngineTab } from './AIEngineTab';
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onOpenModelSetup?: () => void;
 }
 
 type TabId = 'data-sync' | 'ai-engine';
@@ -22,7 +23,7 @@ const TABS: Tab[] = [
   { id: 'ai-engine', label: 'AI Engine', icon: <Cpu className="size-4" /> },
 ];
 
-export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
+export function SettingsModal({ isOpen, onClose, onOpenModelSetup }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<TabId>('data-sync');
 
   return (
@@ -94,7 +95,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               {/* Tab Content */}
               <div className="flex-1 overflow-y-auto p-5">
                 {activeTab === 'data-sync' && <DataSyncTab />}
-                {activeTab === 'ai-engine' && <AIEngineTab />}
+                {activeTab === 'ai-engine' && <AIEngineTab onOpenModelSetup={onOpenModelSetup} />}
               </div>
             </div>
           </motion.div>

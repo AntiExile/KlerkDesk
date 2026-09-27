@@ -1,16 +1,22 @@
-import { useState, useEffect, useRef } from 'react';
-import { Upload, Cpu, Zap, RotateCw, Play, Terminal, Copy, Check } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { Upload, Cpu, Zap, RotateCw, Play, Terminal, Copy, Check, DownloadCloud, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { Toggle } from '@/components/ui/Toggle';
 import { StatusDot } from '@/components/ui/StatusDot';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { load, Store } from '@tauri-apps/plugin-store';
+import type { ModelStatusInfo } from '@/types';
 
-export function AIEngineTab() {
+interface AIEngineTabProps {
+  onOpenModelSetup?: () => void;
+}
+
+export function AIEngineTab({ onOpenModelSetup }: AIEngineTabProps) {
   const [store, setStore] = useState<Store | null>(null);
   
   const [useDefault, setUseDefault] = useState(true);
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  const [modelStatus, setModelStatus] = useState<ModelStatusInfo | null>(null);
   
   const [engineConnected, setEngineConnected] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
@@ -19,6 +25,15 @@ export function AIEngineTab() {
   const [showLogs, setShowLogs] = useState(true);
   const [copied, setCopied] = useState(false);
   const logEndRef = useRef<HTMLDivElement>(null);
+
+  const refreshModelStatus = useCallback(async () => {
+    try {
+      const status = await invoke<ModelStatusInfo>('check_model_status');
+      setModelStatus(status);
+    } catch (e) {
+      console.error('[Terra] Failed to check model status:', e);
+    }
+  }, []);
 
   useEffect(() => {
     async function initStore() {
@@ -32,10 +47,11 @@ export function AIEngineTab() {
       if (savedModel !== null) setSelectedModel(savedModel as string);
     }
     initStore();
+    refreshModelStatus();
     
     // Initial connection test
     handleTestConnection();
-  }, []);
+  }, [refreshModelStatus]);
 
   // Listen for sidecar output
   useEffect(() => {
@@ -132,7 +148,7 @@ export function AIEngineTab() {
 
   return (
     <div className="space-y-6">
-      {/* Default Model Toggle */}
+      {/* Model Configuration */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <div>
@@ -144,6 +160,43 @@ export function AIEngineTab() {
               model.
             </p>
           </div>
+        </div>
+
+        {/* Model Status Card */}
+        <div className="p-3.5 rounded-lg bg-surface-primary/50 border border-border-subtle flex items-center justify-between">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className={`size-8 rounded-lg flex items-center justify-center shrink-0 ${
+              modelStatus?.hasModel ? 'bg-status-success/10 text-status-success' : 'bg-status-warning/10 text-status-warning'
+            }`}>
+              {modelStatus?.hasModel ? <CheckCircle2 className="size-4" /> : <AlertTriangle className="size-4" />}
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-text-primary">
+                  {modelStatus?.hasModel ? (modelStatus.modelName || 'Local Model Ready') : 'No Model Installed'}
+                </span>
+                <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
+                  modelStatus?.hasModel
+                    ? 'bg-status-success/10 text-status-success border border-status-success/20'
+                    : 'bg-status-warning/10 text-status-warning border border-status-warning/20'
+                }`}>
+                  {modelStatus?.hasModel ? (modelStatus.isDefault ? 'Default Model' : 'Custom Model') : 'Action Required'}
+                </span>
+              </div>
+              <div className="text-[11px] text-text-tertiary truncate font-mono mt-0.5" title={modelStatus?.modelPath || ''}>
+                {modelStatus?.modelPath ? modelStatus.modelPath : 'No model weights found on this computer.'}
+              </div>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={onOpenModelSetup}
+            className="ml-3 px-3 py-1.5 rounded-lg bg-surface-tertiary hover:bg-surface-tertiary/80 text-text-primary text-xs font-medium border border-border-default transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
+          >
+            <DownloadCloud className="size-3.5 text-accent-400" />
+            <span>Setup / Download</span>
+          </button>
         </div>
 
         <div className="p-3 rounded-lg bg-surface-primary/50 border border-border-subtle">

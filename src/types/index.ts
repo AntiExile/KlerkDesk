@@ -47,3 +47,20 @@ export interface ConversationSummary {
   title: string;
   updatedAt: string;
 }
+
+export interface ModelStatusInfo {
+  hasModel: boolean;
+  modelPath: string | null;
+  modelName: string | null;
+  isDefault: boolean;
+  defaultModelPath: string;
+}
+
+export interface ModelDownloadProgress {
+  status: 'downloading' | 'verifying' | 'completed' | 'error' | 'cancelled';
+  currentFile: string;
+  downloadedBytes: number;
+  totalBytes: number;
+  percentage: number;
+  errorMessage?: string | null;
+}

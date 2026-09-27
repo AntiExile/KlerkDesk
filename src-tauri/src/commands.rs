@@ -277,11 +277,28 @@ pub async fn ask_question(
             .len()
     );
 
-    // Build context and sources from MMR-selected chunks
+    // Build context and sources from MMR-selected chunks with context window budgeting
     let mut context_chunks = Vec::new();
     let mut sources = Vec::new();
+    let mut current_chars = 0;
+    // Colibri default ctx is 8192 tokens. Reserving 2048 for output generation,
+    // we budget ~14,000 characters (~3,500 tokens) for retrieved context chunks.
+    const MAX_CONTEXT_CHARS: usize = 14_000;
 
     for chunk in &selected {
+        if current_chars + chunk.text.len() > MAX_CONTEXT_CHARS {
+            let remaining = MAX_CONTEXT_CHARS.saturating_sub(current_chars);
+            if remaining > 200 {
+                let truncated: String = chunk.text.chars().take(remaining).collect();
+                context_chunks.push(truncated + "...");
+                sources.push(SourceCitation {
+                    file_path: chunk.file_path.clone(),
+                    text_snippet: chunk.text.chars().take(150).collect::<String>() + "...",
+                });
+            }
+            break;
+        }
+        current_chars += chunk.text.len();
         context_chunks.push(chunk.text.clone());
         sources.push(SourceCitation {
             file_path: chunk.file_path.clone(),
@@ -327,6 +344,8 @@ pub async fn ask_question(
             { "role": "system", "content": "You are Terra, a helpful local assistant. Answer based ONLY on the provided context." },
             { "role": "user", "content": full_prompt }
         ],
+        "max_tokens": 2048,
+        "temperature": 0.3,
         "stream": true
     });
 
@@ -346,6 +365,35 @@ pub async fn ask_question(
     };
 
     println!("[Terra] Sidecar response status: {}", res.status());
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let error_body = res.text().await.unwrap_or_else(|_| "Failed to read error response".to_string());
+        log::error!("[Terra] Sidecar returned error {}: {}", status, error_body);
+
+        let error_msg = if let Ok(json) = serde_json::from_str::<serde_json::Value>(&error_body) {
+            json["error"]["message"].as_str().unwrap_or(&error_body).to_string()
+        } else {
+            error_body
+        };
+
+        let _ = app.emit(
+            "chat-token",
+            ChatTokenEvent {
+                message_id: message_id.clone(),
+                token: format!("\n\n⚠️ **AI Engine Error (HTTP {}):** {}", status, error_msg),
+            },
+        );
+        let _ = app.emit(
+            "chat-done",
+            serde_json::json!({
+                "message_id": message_id.clone()
+            }),
+        );
+        let mut active = query_state.active_queries.lock().unwrap();
+        active.remove(&message_id);
+        return Ok(());
+    }
 
     // 4. Read SSE Stream
     loop {
@@ -475,8 +523,16 @@ pub async fn restart_engine(
     tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
 
     // 2. Spawn the new one
+    use tauri::Manager;
+    let app_data_dir = app.path().app_data_dir().unwrap_or_default();
+    let resource_dir = app.path().resource_dir().unwrap_or_else(|_| app_data_dir.clone());
+
     match app.shell().sidecar("colibri-server") {
         Ok(mut command) => {
+            command = command
+                .env("TERRA_APP_DATA_DIR", app_data_dir.to_string_lossy().to_string())
+                .env("TERRA_RESOURCE_DIR", resource_dir.to_string_lossy().to_string());
+
             if !use_default {
                 if let Some(path) = model_path {
                     if !path.is_empty() {
@@ -531,4 +587,356 @@ pub async fn restart_engine(
         }
         Err(e) => Err(format!("Failed to create sidecar command: {}", e)),
     }
+}
+
+/// Helper to determine if a directory contains valid model weights or configuration.
+pub fn is_valid_model_dir(path: &std::path::Path) -> bool {
+    if !path.exists() || !path.is_dir() {
+        return false;
+    }
+    if path.join("config.json").exists() || path.join("config.hf.json").exists() {
+        return true;
+    }
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            if let Some(ext) = entry.path().extension() {
+                let ext_str = ext.to_string_lossy().to_lowercase();
+                if ext_str == "safetensors" || ext_str == "bin" || ext_str == "gguf" {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Check the current status and location of the local AI model.
+#[tauri::command]
+pub async fn check_model_status(
+    app: tauri::AppHandle,
+) -> Result<crate::types::ModelStatusInfo, String> {
+    use tauri::Manager;
+    use tauri_plugin_store::StoreExt;
+
+    let app_data_dir = app.path().app_data_dir().unwrap_or_default();
+    let default_dest = app_data_dir.join("models").join("default");
+    let default_str = default_dest.to_string_lossy().to_string();
+
+    let mut use_default = true;
+    let mut selected_model = String::new();
+
+    if let Ok(store) = app.store("settings.json") {
+        if let Some(val) = store.get("useDefault") {
+            use_default = val.as_bool().unwrap_or(true);
+        }
+        if let Some(val) = store.get("selectedModel") {
+            selected_model = val.as_str().unwrap_or("").to_string();
+        }
+    }
+
+    // 1. If user explicitly selected a custom model, check it
+    if !use_default && !selected_model.is_empty() {
+        let p = std::path::PathBuf::from(&selected_model);
+        if is_valid_model_dir(&p) {
+            let name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Custom Model".to_string());
+            return Ok(crate::types::ModelStatusInfo {
+                has_model: true,
+                model_path: Some(selected_model),
+                model_name: Some(name),
+                is_default: false,
+                default_model_path: default_str,
+            });
+        }
+    }
+
+    // 2. Check standard default directory
+    if is_valid_model_dir(&default_dest) {
+        return Ok(crate::types::ModelStatusInfo {
+            has_model: true,
+            model_path: Some(default_str.clone()),
+            model_name: Some("Colibrì Default Model".to_string()),
+            is_default: true,
+            default_model_path: default_str,
+        });
+    }
+
+    // 3. Check environment variable
+    if let Ok(env_path) = std::env::var("COLIBRI_MODEL_PATH") {
+        let p = std::path::PathBuf::from(&env_path);
+        if is_valid_model_dir(&p) {
+            let name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Environment Model".to_string());
+            return Ok(crate::types::ModelStatusInfo {
+                has_model: true,
+                model_path: Some(env_path),
+                model_name: Some(name),
+                is_default: true,
+                default_model_path: default_str,
+            });
+        }
+    }
+
+    // 4. Check local development fallback
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default();
+    let dev_model = std::path::PathBuf::from(&home).join("work/MundusAI_Models/Qwen36-Colibri");
+    if is_valid_model_dir(&dev_model) {
+        return Ok(crate::types::ModelStatusInfo {
+            has_model: true,
+            model_path: Some(dev_model.to_string_lossy().to_string()),
+            model_name: Some("Qwen36-Colibri (Local Dev)".to_string()),
+            is_default: true,
+            default_model_path: default_str,
+        });
+    }
+
+    // 5. No model found
+    Ok(crate::types::ModelStatusInfo {
+        has_model: false,
+        model_path: None,
+        model_name: None,
+        is_default: true,
+        default_model_path: default_str,
+    })
+}
+
+/// Set a model directory, either linking directly or importing/copying into standard storage.
+#[tauri::command]
+pub async fn set_model_folder(
+    path: String,
+    copy_to_default: bool,
+    app: tauri::AppHandle,
+    engine_state: State<'_, crate::EngineState>,
+) -> Result<crate::types::ModelStatusInfo, String> {
+    use tauri::Manager;
+    use tauri_plugin_store::StoreExt;
+
+    let source = std::path::PathBuf::from(&path);
+    if !source.exists() || !source.is_dir() {
+        return Err(format!("Directory does not exist: {}", path));
+    }
+
+    if !is_valid_model_dir(&source) {
+        return Err("The selected directory does not appear to contain valid model files (e.g. config.json, .safetensors, or .gguf).".to_string());
+    }
+
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let default_dest = app_data_dir.join("models").join("default");
+
+    let final_model_path: String;
+    let is_default_flag: bool;
+
+    if copy_to_default {
+        std::fs::create_dir_all(&default_dest)
+            .map_err(|e| format!("Failed to create destination directory: {}", e))?;
+        println!("[Terra] Copying model files from {:?} to {:?}", source, default_dest);
+
+        for entry in walkdir::WalkDir::new(&source).min_depth(1).max_depth(3) {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let rel = entry.path().strip_prefix(&source).map_err(|e| e.to_string())?;
+            let target = default_dest.join(rel);
+            if entry.file_type().is_dir() {
+                std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+            } else if entry.file_type().is_file() {
+                let name = entry.file_name().to_string_lossy();
+                if !name.starts_with('.') {
+                    std::fs::copy(entry.path(), &target)
+                        .map_err(|e| format!("Failed to copy file {:?}: {}", rel, e))?;
+                }
+            }
+        }
+        final_model_path = default_dest.to_string_lossy().to_string();
+        is_default_flag = true;
+
+        if let Ok(store) = app.store("settings.json") {
+            store.set("useDefault", serde_json::json!(true));
+            store.set("selectedModel", serde_json::json!(""));
+            let _ = store.save();
+        }
+    } else {
+        final_model_path = path.clone();
+        is_default_flag = false;
+
+        if let Ok(store) = app.store("settings.json") {
+            store.set("useDefault", serde_json::json!(false));
+            store.set("selectedModel", serde_json::json!(path.clone()));
+            let _ = store.save();
+        }
+    }
+
+    // Restart engine with newly selected model
+    let _ = restart_engine(is_default_flag, Some(final_model_path.clone()), app.clone(), engine_state).await;
+
+    let model_name = std::path::Path::new(&final_model_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "Selected Model".to_string());
+
+    Ok(crate::types::ModelStatusInfo {
+        has_model: true,
+        model_path: Some(final_model_path),
+        model_name: Some(model_name),
+        is_default: is_default_flag,
+        default_model_path: default_dest.to_string_lossy().to_string(),
+    })
+}
+
+/// Download default model weights directly into the application storage directory.
+#[tauri::command]
+pub async fn download_default_model(
+    source_url: Option<String>,
+    app: tauri::AppHandle,
+    download_state: State<'_, crate::DownloadState>,
+    engine_state: State<'_, crate::EngineState>,
+) -> Result<(), String> {
+    use tauri::{Emitter, Manager};
+    use tauri_plugin_store::StoreExt;
+
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let target_dir = app_data_dir.join("models").join("default");
+    std::fs::create_dir_all(&target_dir)
+        .map_err(|e| format!("Failed to create models directory: {}", e))?;
+
+    let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+    {
+        let mut guard = download_state.cancel_tx.lock().unwrap();
+        *guard = Some(cancel_tx);
+    }
+
+    let url = source_url.unwrap_or_else(|| {
+        "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/resolve/main/model.safetensors".to_string()
+    });
+
+    let filename = url
+        .split('/')
+        .last()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("model.safetensors")
+        .to_string();
+
+    let dest_file = target_dir.join(&filename);
+
+    let client = reqwest::Client::new();
+    let res = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect to model host: {}", e))?;
+
+    if !res.status().is_success() {
+        return Err(format!("Download failed with HTTP {}", res.status()));
+    }
+
+    let total_bytes = res.content_length().unwrap_or(0);
+    let mut downloaded: u64 = 0;
+
+    let _ = app.emit(
+        "model-download-progress",
+        crate::types::ModelDownloadProgress {
+            status: "downloading".to_string(),
+            current_file: filename.clone(),
+            downloaded_bytes: 0,
+            total_bytes,
+            percentage: 0.0,
+            error_message: None,
+        },
+    );
+
+    let mut file = std::fs::File::create(&dest_file)
+        .map_err(|e| format!("Failed to create destination file: {}", e))?;
+    let mut stream = res.bytes_stream();
+    let mut last_emit = std::time::Instant::now();
+
+    loop {
+        let chunk_res = tokio::select! {
+            chunk_opt = futures::StreamExt::next(&mut stream) => {
+                match chunk_opt {
+                    Some(c) => c,
+                    None => break, // Stream complete
+                }
+            }
+            _ = &mut cancel_rx => {
+                println!("[Terra] Model download cancelled by user");
+                let _ = std::fs::remove_file(&dest_file);
+                let _ = app.emit("model-download-progress", crate::types::ModelDownloadProgress {
+                    status: "cancelled".to_string(),
+                    current_file: filename,
+                    downloaded_bytes: downloaded,
+                    total_bytes,
+                    percentage: 0.0,
+                    error_message: Some("Download cancelled by user".to_string()),
+                });
+                return Ok(());
+            }
+        };
+
+        let chunk = chunk_res.map_err(|e| format!("Download stream error: {}", e))?;
+        use std::io::Write;
+        file.write_all(&chunk)
+            .map_err(|e| format!("Disk write error: {}", e))?;
+        downloaded += chunk.len() as u64;
+
+        if last_emit.elapsed().as_millis() > 150 {
+            let percentage = if total_bytes > 0 {
+                (downloaded as f32 / total_bytes as f32) * 100.0
+            } else {
+                0.0
+            };
+
+            let _ = app.emit(
+                "model-download-progress",
+                crate::types::ModelDownloadProgress {
+                    status: "downloading".to_string(),
+                    current_file: filename.clone(),
+                    downloaded_bytes: downloaded,
+                    total_bytes,
+                    percentage,
+                    error_message: None,
+                },
+            );
+            last_emit = std::time::Instant::now();
+        }
+    }
+
+    if let Ok(store) = app.store("settings.json") {
+        store.set("useDefault", serde_json::json!(true));
+        store.set("selectedModel", serde_json::json!(""));
+        let _ = store.save();
+    }
+
+    let _ = app.emit(
+        "model-download-progress",
+        crate::types::ModelDownloadProgress {
+            status: "completed".to_string(),
+            current_file: filename,
+            downloaded_bytes: downloaded,
+            total_bytes: downloaded,
+            percentage: 100.0,
+            error_message: None,
+        },
+    );
+
+    // Auto-restart engine with new model
+    let _ = restart_engine(true, None, app, engine_state).await;
+
+    Ok(())
+}
+
+/// Cancel an ongoing model download.
+#[tauri::command]
+pub fn cancel_model_download(
+    download_state: State<'_, crate::DownloadState>,
+) -> Result<(), String> {
+    let mut guard = download_state.cancel_tx.lock().unwrap();
+    if let Some(tx) = guard.take() {
+        let _ = tx.send(());
+        println!("[Terra] Cancelled model download");
+    }
+    Ok(())
 }
