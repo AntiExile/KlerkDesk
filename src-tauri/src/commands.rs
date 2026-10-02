@@ -4,7 +4,7 @@ use lancedb::connection::Connection;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use std::sync::{Arc, Mutex};
 
-use tauri::State;
+use tauri::{Emitter, State};
 
 use crate::rag::embed::Embedder;
 
@@ -50,24 +50,60 @@ pub fn add_watched_folder(
     let conn_clone = db_conn.inner().clone();
     let embedder_clone = embedder.inner().clone();
     let folder_path = folder.path.clone();
+    let app_clone = app.clone();
 
     tauri::async_runtime::spawn(async move {
         println!("[Terra] Starting initial sync for {:?}", folder_path);
         let files = watcher::list_files(&folder_path);
+        let mut supported_files = Vec::new();
         for file in files {
             let path_buf = std::path::PathBuf::from(&file.path);
             let ext = path_buf
                 .extension()
                 .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-            if ["txt", "md", "csv", "json", "pdf"].contains(&ext.as_str()) {
+                .unwrap_or("");
+            if crate::rag::ingest::is_supported_extension(ext) {
+                supported_files.push(path_buf);
+            }
+        }
+
+        let total = supported_files.len();
+        if total > 0 {
+            let _ = app_clone.emit("indexing-progress", serde_json::json!({
+                "completed": 0,
+                "total": total,
+                "currentFile": ""
+            }));
+
+            let mut completed = 0;
+            for path_buf in supported_files {
+                let file_name = path_buf
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let _ = app_clone.emit("indexing-progress", serde_json::json!({
+                    "completed": completed,
+                    "total": total,
+                    "currentFile": file_name
+                }));
+
                 if let Err(e) =
                     crate::rag::ingest::process_file(&path_buf, &embedder_clone, &conn_clone).await
                 {
                     log::error!("[Terra] Initial sync failed for {:?}: {}", path_buf, e);
                 }
+                completed += 1;
+                let _ = app_clone.emit("indexing-progress", serde_json::json!({
+                    "completed": completed,
+                    "total": total,
+                    "currentFile": file_name
+                }));
             }
+            let _ = app_clone.emit("indexing-done", serde_json::json!({ "totalFiles": completed }));
+        } else {
+            let _ = app_clone.emit("indexing-done", serde_json::json!({ "totalFiles": 0 }));
         }
         println!("[Terra] Initial sync completed for {:?}", folder_path);
     });
@@ -83,22 +119,116 @@ pub fn add_watched_folder(
 
 /// Remove a folder from the watch list.
 #[tauri::command]
-pub fn remove_watched_folder(
+pub async fn remove_watched_folder(
     id: String,
     state: State<'_, Mutex<WatcherState>>,
+    db_conn: State<'_, Arc<lancedb::connection::Connection>>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let mut watcher = state.lock().map_err(|e| format!("Lock error: {}", e))?;
-    let result = watcher.remove_folder(&id);
+    let (result, folder_path) = {
+        let mut watcher = state.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let path = watcher.folders.iter().find(|f| f.id == id).map(|f| f.path.clone());
+        let res = watcher.remove_folder(&id);
+        (res, path)
+    };
 
     use tauri_plugin_store::StoreExt;
     if let Ok(store) = app.store("settings.json") {
-        let folders: Vec<String> = watcher.folders.iter().map(|f| f.path.clone()).collect();
-        store.set("watchedFolders", serde_json::json!(folders));
-        let _ = store.save();
+        if let Ok(watcher) = state.lock() {
+            let folders: Vec<String> = watcher.folders.iter().map(|f| f.path.clone()).collect();
+            store.set("watchedFolders", serde_json::json!(folders));
+            let _ = store.save();
+        }
+    }
+
+    if let Some(ref folder) = folder_path {
+        println!("[Terra] Removing watched folder {:?}, purging chunks from LanceDB...", folder);
+        if let Err(e) = crate::rag::db::delete_folder_chunks(&db_conn, folder).await {
+            log::error!("[Terra] Failed to delete chunks for folder {:?}: {}", folder, e);
+        }
     }
 
     result
+}
+
+/// Re-index all watched folders: clears vector database and re-embeds all documents.
+#[tauri::command]
+pub async fn reindex_all(
+    watcher_state: State<'_, Mutex<WatcherState>>,
+    db_conn: State<'_, Arc<lancedb::connection::Connection>>,
+    embedder: State<'_, Arc<Embedder>>,
+    app: tauri::AppHandle,
+) -> Result<usize, String> {
+    println!("[Terra] Starting Re-index All: clearing LanceDB...");
+    crate::rag::db::clear_all_chunks(&db_conn).await?;
+
+    let folders = {
+        let watcher = watcher_state.lock().map_err(|e| format!("Lock error: {}", e))?;
+        watcher.folders.clone()
+    };
+
+    let mut supported_files = Vec::new();
+    for folder in &folders {
+        println!("[Terra] Scanning folder {:?} for re-indexing", folder.path);
+        let files = watcher::list_files(&folder.path);
+        for file in files {
+            let path_buf = std::path::PathBuf::from(&file.path);
+            let ext = path_buf
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
+            if crate::rag::ingest::is_supported_extension(ext) {
+                supported_files.push(path_buf);
+            }
+        }
+    }
+
+    let total = supported_files.len();
+    println!("[Terra] Re-indexing {} supported files across {} folders", total, folders.len());
+
+    let _ = app.emit("indexing-progress", serde_json::json!({
+        "completed": 0,
+        "total": total,
+        "currentFile": ""
+    }));
+
+    let mut completed = 0;
+    for path_buf in supported_files {
+        let file_name = path_buf
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+
+        let _ = app.emit("indexing-progress", serde_json::json!({
+            "completed": completed,
+            "total": total,
+            "currentFile": file_name
+        }));
+
+        if let Err(e) = crate::rag::ingest::process_file(&path_buf, &embedder, &db_conn).await {
+            log::error!("[Terra] Failed to re-index {:?}: {}", path_buf, e);
+        }
+
+        completed += 1;
+        let _ = app.emit("indexing-progress", serde_json::json!({
+            "completed": completed,
+            "total": total,
+            "currentFile": file_name
+        }));
+    }
+
+    println!("[Terra] Re-indexing completed: {} files processed", completed);
+    let _ = app.emit("indexing-done", serde_json::json!({ "totalFiles": completed }));
+    Ok(completed)
+}
+
+/// Returns the total count of document chunks in LanceDB.
+#[tauri::command]
+pub async fn get_indexed_chunk_count(
+    db_conn: State<'_, Arc<lancedb::connection::Connection>>,
+) -> Result<usize, String> {
+    crate::rag::db::count_chunks(&db_conn).await
 }
 
 /// Get all watched folders with live file counts.

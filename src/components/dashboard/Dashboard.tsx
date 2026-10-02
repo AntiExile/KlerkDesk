@@ -1,9 +1,11 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { load } from '@tauri-apps/plugin-store';
+import { RefreshCw, CheckCircle2 } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 import { ChatArea } from './ChatArea';
-import type { Conversation, ConversationSummary, Message } from '@/types';
+import type { Conversation, ConversationSummary, Message, IndexingProgress, IndexingDone } from '@/types';
 
 interface DashboardProps {
   onOpenSettings: () => void;
@@ -47,8 +49,38 @@ export function Dashboard({ onOpenSettings }: DashboardProps) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [indexingProgress, setIndexingProgress] = useState<IndexingProgress | null>(null);
+  const [indexingSuccess, setIndexingSuccess] = useState(false);
   const storeRef = useRef<Awaited<ReturnType<typeof load>> | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Listen to indexing progress ──
+  useEffect(() => {
+    let unlistenProgress: (() => void) | undefined;
+    let unlistenDone: (() => void) | undefined;
+
+    const setupIndexingListeners = async () => {
+      unlistenProgress = await listen<IndexingProgress>('indexing-progress', (event) => {
+        setIndexingProgress(event.payload);
+        setIndexingSuccess(false);
+      });
+
+      unlistenDone = await listen<IndexingDone>('indexing-done', () => {
+        setIndexingProgress(null);
+        setIndexingSuccess(true);
+        setTimeout(() => {
+          setIndexingSuccess(false);
+        }, 3500);
+      });
+    };
+
+    setupIndexingListeners();
+
+    return () => {
+      if (unlistenProgress) unlistenProgress();
+      if (unlistenDone) unlistenDone();
+    };
+  }, []);
 
   // ── Load conversations from store on mount ──
   useEffect(() => {
@@ -224,12 +256,48 @@ export function Dashboard({ onOpenSettings }: DashboardProps) {
         onRenameConversation={handleRenameConversation}
         onDeleteConversation={handleDeleteConversation}
       />
-      <ChatArea
-        activeFolderPaths={activeFolderPaths}
-        messages={activeConversation?.messages ?? []}
-        onMessagesChange={handleMessagesChange}
-        conversationTitle={activeConversation?.title ?? 'New Conversation'}
-      />
+      <div className="flex flex-col flex-1 h-full min-w-0">
+        {indexingProgress && indexingProgress.total > 0 && (
+          <div className="bg-surface-secondary/90 backdrop-blur-sm border-b border-border-subtle px-4 py-2 flex items-center justify-between gap-4 text-xs transition-all">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <RefreshCw className="size-3.5 text-accent-400 animate-spin flex-shrink-0" />
+              <span className="font-medium text-text-primary">
+                Indexing Knowledge Base:
+              </span>
+              <span className="text-text-secondary truncate">
+                {indexingProgress.currentFile || 'Scanning documents...'}
+              </span>
+            </div>
+            <div className="flex items-center gap-3 flex-shrink-0">
+              <span className="font-mono text-[11px] text-text-tertiary">
+                {indexingProgress.completed} / {indexingProgress.total} files ({Math.round((indexingProgress.completed / indexingProgress.total) * 100)}%)
+              </span>
+              <div className="w-28 bg-surface-tertiary rounded-full h-1.5 overflow-hidden">
+                <div
+                  className="bg-accent-500 h-full transition-all duration-200 ease-out"
+                  style={{
+                    width: `${Math.min(100, Math.round((indexingProgress.completed / indexingProgress.total) * 100))}%`,
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {indexingSuccess && (
+          <div className="bg-accent-500/10 border-b border-accent-500/20 px-4 py-1.5 flex items-center gap-2 text-xs text-accent-400 transition-all">
+            <CheckCircle2 className="size-3.5 flex-shrink-0" />
+            <span>Knowledge base indexing completed. All documents are up to date.</span>
+          </div>
+        )}
+
+        <ChatArea
+          activeFolderPaths={activeFolderPaths}
+          messages={activeConversation?.messages ?? []}
+          onMessagesChange={handleMessagesChange}
+          conversationTitle={activeConversation?.title ?? 'New Conversation'}
+        />
+      </div>
     </div>
   );
 }

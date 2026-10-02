@@ -3,6 +3,25 @@ export interface SourceCitation {
   textSnippet: string;
 }
 
+export interface ThinkingStep {
+  id: string;
+  label: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  durationMs?: number;
+  detail?: string;
+}
+
+export interface ActionApprovalData {
+  id: string;
+  title: string;
+  description?: string;
+  command?: string;
+  targetResource?: string;
+  riskLevel: 'low' | 'medium' | 'high' | 'critical';
+  confidenceScore: number;
+  status: 'pending' | 'approved' | 'rejected' | 'executing';
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -11,6 +30,9 @@ export interface Message {
   contentType: 'text' | 'code' | 'table' | 'markdown';
   sources?: SourceCitation[];
   isThinking?: boolean;
+  thinkingSteps?: ThinkingStep[];
+  thinkingDuration?: number;
+  actionApproval?: ActionApprovalData;
 }
 
 export interface SyncFolder {
@@ -63,4 +85,14 @@ export interface ModelDownloadProgress {
   totalBytes: number;
   percentage: number;
   errorMessage?: string | null;
+}
+
+export interface IndexingProgress {
+  completed: number;
+  total: number;
+  currentFile: string;
+}
+
+export interface IndexingDone {
+  totalFiles: number;
 }

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { FolderOpen, Trash2, Plus, RefreshCw, Loader2 } from 'lucide-react';
+import type { IndexingProgress, IndexingDone } from '@/types';
 
 interface WatchedFolderInfo {
   id: string;
@@ -16,6 +17,8 @@ export function DataSyncTab() {
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
+  const [reindexing, setReindexing] = useState(false);
+  const [indexingProgress, setIndexingProgress] = useState<IndexingProgress | null>(null);
 
   const refreshData = useCallback(async () => {
     try {
@@ -32,18 +35,52 @@ export function DataSyncTab() {
     }
   }, []);
 
+  const handleReindexAll = async () => {
+    setReindexing(true);
+    try {
+      await invoke<number>('reindex_all');
+      await refreshData();
+    } catch (err) {
+      console.error('[Terra] Failed to reindex all:', err);
+    } finally {
+      setReindexing(false);
+    }
+  };
+
   // Load data on mount
   useEffect(() => {
     refreshData();
   }, [refreshData]);
 
-  // Listen for FS change events and refresh counts
+  // Listen for FS change and indexing events to refresh counts and show progress
   useEffect(() => {
-    const unlisten = listen('terra://fs-change', () => {
-      refreshData();
-    });
+    let unlistenProgress: (() => void) | undefined;
+    let unlistenDone: (() => void) | undefined;
+    let unlistenFsChange: (() => void) | undefined;
+
+    const setupListeners = async () => {
+      unlistenProgress = await listen<IndexingProgress>('indexing-progress', (event) => {
+        setIndexingProgress(event.payload);
+        setReindexing(true);
+      });
+
+      unlistenDone = await listen<IndexingDone>('indexing-done', () => {
+        setIndexingProgress(null);
+        setReindexing(false);
+        refreshData();
+      });
+
+      unlistenFsChange = await listen('terra://fs-change', () => {
+        refreshData();
+      });
+    };
+
+    setupListeners();
+
     return () => {
-      unlisten.then((fn) => fn());
+      if (unlistenProgress) unlistenProgress();
+      if (unlistenDone) unlistenDone();
+      if (unlistenFsChange) unlistenFsChange();
     };
   }, [refreshData]);
 
@@ -158,13 +195,42 @@ export function DataSyncTab() {
         </span>
         <button
           type="button"
-          onClick={refreshData}
-          className="flex items-center gap-1.5 text-xs text-accent-400 hover:text-accent-300 transition-colors cursor-pointer bg-transparent border-none"
+          onClick={handleReindexAll}
+          disabled={reindexing}
+          className="flex items-center gap-1.5 text-xs text-accent-400 hover:text-accent-300 transition-colors cursor-pointer bg-transparent border-none disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          <RefreshCw className="size-3" />
-          Re-index all
+          <RefreshCw className={`size-3 ${reindexing ? 'animate-spin' : ''}`} />
+          {reindexing ? 'Re-indexing...' : 'Re-index all'}
         </button>
       </div>
+
+      {/* Real-time Ingestion Progress Card */}
+      {indexingProgress && indexingProgress.total > 0 && (
+        <div className="p-3 bg-surface-tertiary/60 border border-border-subtle rounded-lg space-y-2">
+          <div className="flex items-center justify-between text-xs">
+            <span className="font-medium text-text-primary flex items-center gap-1.5">
+              <RefreshCw className="size-3 text-accent-400 animate-spin flex-shrink-0" />
+              Indexing Documents ({indexingProgress.completed} / {indexingProgress.total})
+            </span>
+            <span className="font-mono text-text-tertiary">
+              {Math.round((indexingProgress.completed / indexingProgress.total) * 100)}%
+            </span>
+          </div>
+          {indexingProgress.currentFile && (
+            <p className="text-[11px] text-text-tertiary truncate" title={indexingProgress.currentFile}>
+              {indexingProgress.currentFile}
+            </p>
+          )}
+          <div className="w-full bg-surface-primary rounded-full h-1.5 overflow-hidden">
+            <div
+              className="bg-accent-500 h-full transition-all duration-200 ease-out"
+              style={{
+                width: `${Math.min(100, Math.round((indexingProgress.completed / indexingProgress.total) * 100))}%`,
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

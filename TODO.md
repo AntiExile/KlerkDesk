@@ -45,18 +45,23 @@ This document tracks all remaining tasks, bug fixes, and architectural requireme
 
 ## 2. RAG Pipeline & Vector DB Integrity
 
-- [ ] **LanceDB Stale Chunk Purging & Deduplication**:
-  - Currently, updating a file inserts duplicate chunks with fresh UUIDs without deleting previous chunks for that `file_path`.
-  - Deleting a file from a watched folder never purges its chunks from LanceDB.
-  - Implement a `delete_file_chunks(file_path)` helper in `src-tauri/src/rag/db.rs` and invoke it prior to re-indexing and upon file deletion.
-- [ ] **Real Ingestion Progress Events**:
-  - Replace the simulated 1.5s frontend timer (`Sidebar.tsx`) with genuine Tauri events (`indexing-progress` with `{ completed, total, currentFile }` and `indexing-done`).
-  - Display an indexing progress bar in the dashboard when syncing large folder trees.
-- [ ] **Functional "Re-Index All" Command**:
-  - In `DataSyncTab.tsx`, the "Re-index all" button only queries metadata counts. Implement a true `reindex_all` Tauri backend command that clears and re-embeds all watched folders.
-- [ ] **Expanded Document Formats**:
-  - Add native parsing for `.docx`, `.xlsx`, `.pptx`, and structured tables.
-  - Enhance PDF parsing resilience in `ingest.rs` against corrupted, encrypted, or password-protected files.
+- [x] **LanceDB Stale Chunk Purging & Deduplication**:
+  - Implemented `delete_file_chunks(conn, file_path)`, `delete_folder_chunks(conn, folder_path)`, `clear_all_chunks(conn)`, and `count_chunks(conn)` in `src-tauri/src/rag/db.rs`.
+  - Updated `process_file` in `src-tauri/src/rag/ingest.rs` to purge previous chunks before inserting fresh embeddings, eliminating duplicates upon re-indexing or editing files.
+  - Handled file deletion in `process_file` and `watcher.rs` to automatically purge chunks from LanceDB when documents are deleted from disk.
+  - Updated `remove_watched_folder` in `src-tauri/src/commands.rs` to purge all chunks associated with a removed folder.
+  - Added unit test `test_db_chunk_purging_and_lifecycle` validating file deletion, folder purging, and chunk counting.
+- [x] **Real Ingestion Progress Events**:
+  - Replaced the simulated 1.5s frontend timer (`Sidebar.tsx`) with genuine Tauri events (`indexing-progress` with `{ completed, total, currentFile }` and `indexing-done`).
+  - Added live indexing indicator, file names, percentage, and progress bars in `Sidebar.tsx`, `Dashboard.tsx`, and `DataSyncTab.tsx`.
+- [x] **Functional "Re-Index All" Command**:
+  - Implemented `reindex_all` backend command in `src-tauri/src/commands.rs` that clears LanceDB and re-embeds all files across all watched folders.
+  - Connected `DataSyncTab.tsx`'s "Re-index all" button to invoke `reindex_all` with spinning animation, disabled state, and automatic file count refresh.
+- [x] **Expanded Document Formats**:
+  - Implemented high-performance native parsing for `.docx` (Word OpenXML) and `.xlsx` (Excel sheets and shared strings) with clean fallback and table row formatting.
+  - Implemented structured `.csv` extraction with repeating column headers across chunk blocks (`[Columns: ...]`).
+  - Added robust PDF parsing resilience in `ingest.rs` with graceful error logging and scanned/empty PDF detection warnings.
+  - Added unit tests: `test_docx_text_extraction`, `test_xlsx_text_extraction`, `test_parse_csv_structured_injects_headers`, and `test_is_supported_extension`.
 - [ ] **OCR Engine**:
   - Integrate an OCR engine (e.g., Tesseract or lightweight vision model) for scanned PDFs and document images.
 

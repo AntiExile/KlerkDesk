@@ -1,203 +1,161 @@
-import { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { openPath } from '@tauri-apps/plugin-opener';
-import { X } from 'lucide-react';
+import { motion } from 'framer-motion';
 import type { Message } from '@/types';
+import { ThinkingTrace } from '@/components/chat/ThinkingTrace';
+import { ContextCard } from '@/components/chat/ContextCard';
+import { ActionApproval } from '@/components/chat/ActionApproval';
 
 interface MessageBubbleProps {
   message: Message;
+  onApproveAction?: (messageId: string, actionId?: string) => void;
+  onRejectAction?: (messageId: string, actionId?: string) => void;
 }
 
-export function MessageBubble({ message }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  onApproveAction,
+  onRejectAction,
+}: MessageBubbleProps) {
   const isUser = message.role === 'user';
-  const [showAllSources, setShowAllSources] = useState(false);
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25, ease: 'easeOut' }}
-      className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-4`}
+      className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-5 w-full`}
     >
       <div
         className={`
-          flex gap-3 max-w-[80%]
+          flex gap-3 max-w-[88%] lg:max-w-[82%]
           ${isUser ? 'flex-row-reverse' : 'flex-row'}
         `}
       >
         {/* Avatar */}
         {!isUser && (
-          <div className="shrink-0 size-7 rounded-lg bg-accent-600/20 flex items-center justify-center mt-0.5">
+          <div className="shrink-0 size-7 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center mt-1 shadow-sm">
             <span className="text-accent-400 text-xs font-bold">T</span>
           </div>
         )}
 
-        {/* Content */}
-        <div
-          className={`
-            rounded-xl px-4 py-2.5 text-sm leading-relaxed
-            ${isUser
-              ? 'bg-accent-600/15 text-text-primary border border-accent-700/20'
-              : 'bg-surface-tertiary/50 text-text-primary border border-border-subtle'
-            }
-          `}
-        >
-          {message.contentType === 'code' ? (
-            <pre className="font-mono text-xs bg-surface-primary/50 rounded-lg p-3 overflow-x-auto my-1 border border-border-subtle">
-              <code>{message.content}</code>
-            </pre>
-          ) : message.contentType === 'table' ? (
-            <div className="overflow-x-auto my-1">
-              <div
-                className="text-xs [&_table]:w-full [&_table]:border-collapse [&_th]:text-left [&_th]:px-3 [&_th]:py-2 [&_th]:border-b [&_th]:border-border-default [&_th]:text-text-secondary [&_th]:font-medium [&_td]:px-3 [&_td]:py-2 [&_td]:border-b [&_td]:border-border-subtle [&_td]:text-text-primary"
-                dangerouslySetInnerHTML={{ __html: message.content }}
-              />
-            </div>
-          ) : (
-            <div className="whitespace-pre-wrap">
-              {renderMarkdownLite(message.content)}
-              {message.isThinking && (
-                <span className="inline-flex items-center gap-1 text-text-tertiary ml-2 italic">
-                  <span className="size-1.5 rounded-full bg-accent-400 animate-pulse" />
-                  <span className="size-1.5 rounded-full bg-accent-400 animate-pulse delay-75" />
-                  <span className="size-1.5 rounded-full bg-accent-400 animate-pulse delay-150" />
-                </span>
+        {/* Bubble container */}
+        <div className="flex flex-col min-w-0 flex-1 space-y-2.5">
+          {/* 1. Thinking Primitive (Accordion with elapsed time & sequential inference steps) */}
+          {!isUser && (message.isThinking || message.thinkingSteps || message.thinkingDuration) && (
+            <ThinkingTrace
+              isThinking={message.isThinking}
+              steps={message.thinkingSteps}
+              totalDurationMs={message.thinkingDuration}
+            />
+          )}
+
+          {/* 2. Context Cards Primitive (Document citations just above AI's text response) */}
+          {!isUser && message.sources && message.sources.length > 0 && (
+            <ContextCard citations={message.sources} />
+          )}
+
+          {/* 3. Message Body */}
+          {(message.content || (!message.isThinking && !message.actionApproval)) && (
+            <div
+              className={`
+                rounded-xl px-4 py-3 text-sm leading-relaxed
+                ${isUser
+                  ? 'bg-accent-600/20 text-zinc-100 border border-accent-500/30'
+                  : 'bg-zinc-950/80 text-zinc-200 border border-zinc-800/80 shadow-sm'
+                }
+              `}
+            >
+              {message.contentType === 'code' ? (
+                <pre className="font-mono text-xs bg-zinc-900/90 rounded-lg p-3 overflow-x-auto my-1 border border-zinc-800 text-zinc-200">
+                  <code>{message.content}</code>
+                </pre>
+              ) : message.contentType === 'table' ? (
+                <div className="overflow-x-auto my-1">
+                  <div
+                    className="text-xs [&_table]:w-full [&_table]:border-collapse [&_th]:text-left [&_th]:px-3 [&_th]:py-2 [&_th]:border-b [&_th]:border-zinc-800 [&_th]:text-zinc-400 [&_th]:font-medium [&_td]:px-3 [&_td]:py-2 [&_td]:border-b [&_td]:border-zinc-900 [&_td]:text-zinc-200"
+                    dangerouslySetInnerHTML={{ __html: message.content }}
+                  />
+                </div>
+              ) : (
+                <div className="whitespace-pre-wrap select-text">
+                  {renderMarkdownLite(message.content)}
+                </div>
               )}
+
+              {/* Timestamp */}
+              <div
+                className={`
+                  text-[10px] font-mono mt-2
+                  ${isUser ? 'text-accent-400/60 text-right' : 'text-zinc-500'}
+                `}
+              >
+                {formatTime(message.timestamp)}
+              </div>
             </div>
           )}
 
-          {/* Timestamp */}
-          <div
-            className={`
-              text-[10px] mt-1.5
-              ${isUser ? 'text-accent-400/50 text-right' : 'text-text-tertiary/60'}
-            `}
-          >
-            {formatTime(message.timestamp)}
-          </div>
-
-          {/* RAG Citations */}
-          {message.sources && message.sources.length > 0 && (
-            <div className="mt-4 pt-3 border-t border-border-subtle/50 space-y-2">
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-text-tertiary flex items-center gap-1.5">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="size-3 text-accent-500">
-                  <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" />
-                </svg>
-                Sources
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {message.sources.slice(0, 3).map((source, idx) => (
-                  <div
-                    key={idx}
-                    onClick={() => openPath(source.filePath)}
-                    className="flex flex-col bg-surface-primary/30 border border-border-subtle rounded-md px-2.5 py-2 hover:border-accent-500/30 transition-colors max-w-sm group cursor-pointer"
-                    title={source.textSnippet}
-                  >
-                    <span className="text-xs font-medium text-accent-300 truncate max-w-full">
-                      {source.filePath.split('/').pop() || source.filePath.split('\\').pop() || source.filePath}
-                    </span>
-                    <span className="text-[10px] text-text-tertiary line-clamp-2 mt-0.5 leading-relaxed group-hover:text-text-secondary transition-colors">
-                      {source.textSnippet}
-                    </span>
-                  </div>
-                ))}
-                {message.sources.length > 3 && (
-                  <button
-                    onClick={() => setShowAllSources(true)}
-                    className="flex items-center justify-center text-xs text-accent-400 hover:text-accent-300 px-3 rounded-md border border-dashed border-accent-500/30 hover:border-accent-500/50 hover:bg-accent-500/10 transition-colors cursor-pointer"
-                  >
-                    +{message.sources.length - 3} more
-                  </button>
-                )}
-              </div>
-            </div>
+          {/* 4. Action Approval Primitive (Human-in-the-loop workflow card) */}
+          {!isUser && message.actionApproval && (
+            <ActionApproval
+              {...message.actionApproval}
+              onApprove={(actionId) => onApproveAction?.(message.id, actionId)}
+              onReject={(actionId) => onRejectAction?.(message.id, actionId)}
+            />
           )}
         </div>
       </div>
-
-      {/* Sources Modal */}
-      <AnimatePresence>
-        {showAllSources && message.sources && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-            onClick={() => setShowAllSources(false)}
-          >
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              onClick={(e) => e.stopPropagation()}
-              className="bg-surface-secondary border border-border-default rounded-xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl"
-            >
-              <div className="flex items-center justify-between px-5 py-4 border-b border-border-subtle">
-                <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="size-4 text-accent-500">
-                    <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" />
-                  </svg>
-                  All Sources ({message.sources.length})
-                </h3>
-                <button
-                  onClick={() => setShowAllSources(false)}
-                  className="p-1 rounded-md text-text-tertiary hover:text-text-primary hover:bg-surface-tertiary transition-colors cursor-pointer border-none"
-                >
-                  <X className="size-4" />
-                </button>
-              </div>
-              <div className="p-5 overflow-y-auto space-y-3">
-                {message.sources.map((source, idx) => (
-                  <div
-                    key={idx}
-                    onClick={() => openPath(source.filePath)}
-                    className="flex flex-col bg-surface-primary/30 border border-border-subtle rounded-md px-4 py-3 hover:border-accent-500/30 transition-colors group cursor-pointer"
-                  >
-                    <span className="text-sm font-medium text-accent-300 truncate mb-1">
-                      {source.filePath.split('/').pop() || source.filePath.split('\\').pop() || source.filePath}
-                    </span>
-                    <span className="text-xs text-text-tertiary leading-relaxed group-hover:text-text-secondary transition-colors">
-                      {source.textSnippet}
-                    </span>
-                    <span className="text-[10px] text-text-tertiary/50 truncate mt-2">
-                      {source.filePath}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </motion.div>
   );
 }
 
-/** Lightweight inline markdown: **bold**, `code`, line breaks */
+function formatTime(d: Date | string): string {
+  try {
+    const date = typeof d === 'string' ? new Date(d) : d;
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '';
+  }
+}
+
+/** Lightweight markdown renderer for bold, italic, and inline code */
 function renderMarkdownLite(text: string) {
-  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+  const parts = text.split(/(```[\s\S]*?```|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g);
+
   return parts.map((part, i) => {
-    if (part.startsWith('**') && part.endsWith('**')) {
+    if (part.startsWith('```') && part.endsWith('```')) {
+      const code = part.slice(3, -3).replace(/^[a-z]+\n/, '');
       return (
-        <strong key={i} className="font-semibold">
-          {part.slice(2, -2)}
-        </strong>
+        <pre
+          key={i}
+          className="font-mono text-xs bg-zinc-900 border border-zinc-800 rounded-lg p-3 overflow-x-auto my-2 text-zinc-200"
+        >
+          <code>{code}</code>
+        </pre>
       );
     }
     if (part.startsWith('`') && part.endsWith('`')) {
       return (
         <code
           key={i}
-          className="font-mono text-xs bg-surface-primary/60 px-1.5 py-0.5 rounded text-accent-300"
+          className="font-mono text-xs bg-zinc-900/90 text-accent-300 px-1.5 py-0.5 rounded border border-zinc-800/80"
         >
           {part.slice(1, -1)}
         </code>
       );
     }
-    return <span key={i}>{part}</span>;
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return (
+        <strong key={i} className="font-semibold text-zinc-100">
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+    if (part.startsWith('*') && part.endsWith('*')) {
+      return (
+        <em key={i} className="italic text-zinc-300">
+          {part.slice(1, -1)}
+        </em>
+      );
+    }
+    return part;
   });
-}
-
-function formatTime(date: Date): string {
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }

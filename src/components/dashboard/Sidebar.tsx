@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { StatusDot } from '@/components/ui/StatusDot';
 import { IconButton } from '@/components/ui/IconButton';
-import type { ConversationSummary } from '@/types';
+import type { ConversationSummary, IndexingProgress, IndexingDone } from '@/types';
 
 interface SidebarProps {
   onOpenSettings: () => void;
@@ -71,6 +71,7 @@ export function Sidebar({
   const [folders, setFolders] = useState<WatchedFolderInfo[]>([]);
   const [docCount, setDocCount] = useState<number>(0);
   const [syncStatus, setSyncStatus] = useState<'synced' | 'indexing'>('synced');
+  const [indexingProgress, setIndexingProgress] = useState<IndexingProgress | null>(null);
   const [adding, setAdding] = useState(false);
 
   // ── Collapsible Section State ──
@@ -99,13 +100,34 @@ export function Sidebar({
   useEffect(() => { refreshData(); }, [refreshData]);
 
   useEffect(() => {
-    const unlisten = listen('terra://fs-change', () => {
-      setSyncStatus('indexing');
-      refreshData().then(() => {
-        setTimeout(() => setSyncStatus('synced'), 1500);
+    let unlistenProgress: (() => void) | undefined;
+    let unlistenDone: (() => void) | undefined;
+    let unlistenFsChange: (() => void) | undefined;
+
+    const setupListeners = async () => {
+      unlistenProgress = await listen<IndexingProgress>('indexing-progress', (event) => {
+        setSyncStatus('indexing');
+        setIndexingProgress(event.payload);
       });
-    });
-    return () => { unlisten.then((fn) => fn()); };
+
+      unlistenDone = await listen<IndexingDone>('indexing-done', () => {
+        setSyncStatus('synced');
+        setIndexingProgress(null);
+        refreshData();
+      });
+
+      unlistenFsChange = await listen('terra://fs-change', () => {
+        refreshData();
+      });
+    };
+
+    setupListeners();
+
+    return () => {
+      if (unlistenProgress) unlistenProgress();
+      if (unlistenDone) unlistenDone();
+      if (unlistenFsChange) unlistenFsChange();
+    };
   }, [refreshData]);
 
   const handleAddFolder = async () => {
@@ -380,12 +402,40 @@ export function Sidebar({
             status={syncStatus === 'synced' ? 'success' : 'warning'}
             pulse={syncStatus === 'indexing'}
           />
-          <span className="text-xs text-text-tertiary">
-            {syncStatus === 'synced'
-              ? 'Ready'
-              : 'Indexing documents...'}
-          </span>
+          <div className="flex flex-col min-w-0 flex-1">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-medium text-text-secondary truncate">
+                {syncStatus === 'synced'
+                  ? 'Ready'
+                  : indexingProgress && indexingProgress.total > 0
+                    ? `Indexing (${indexingProgress.completed}/${indexingProgress.total})`
+                    : 'Indexing documents...'}
+              </span>
+              {indexingProgress && indexingProgress.total > 0 && (
+                <span className="text-[10px] text-text-tertiary ml-1 font-mono">
+                  {Math.round((indexingProgress.completed / indexingProgress.total) * 100)}%
+                </span>
+              )}
+            </div>
+            {indexingProgress && indexingProgress.currentFile && (
+              <span className="text-[10px] text-text-tertiary truncate" title={indexingProgress.currentFile}>
+                {indexingProgress.currentFile}
+              </span>
+            )}
+          </div>
         </div>
+
+        {indexingProgress && indexingProgress.total > 0 && (
+          <div className="w-full bg-surface-tertiary rounded-full h-1.5 overflow-hidden">
+            <div
+              className="bg-accent-500 h-full transition-all duration-200 ease-out"
+              style={{
+                width: `${Math.min(100, Math.round((indexingProgress.completed / indexingProgress.total) * 100))}%`,
+              }}
+            />
+          </div>
+        )}
+
         <div className="flex items-center justify-between px-1">
           <span className="text-[11px] text-text-tertiary">
             {docCount.toLocaleString()} documents indexed

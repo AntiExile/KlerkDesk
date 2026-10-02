@@ -50,6 +50,8 @@ pub fn run() {
             commands::set_model_folder,
             commands::download_default_model,
             commands::cancel_model_download,
+            commands::reindex_all,
+            commands::get_indexed_chunk_count,
         ])
         .manage(QueryState {
             active_queries: Mutex::new(std::collections::HashMap::new()),

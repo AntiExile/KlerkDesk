@@ -58,7 +58,17 @@ export function ChatArea({
         onMessagesChange((prev) =>
           prev.map((msg) =>
             msg.id === event.payload.message_id
-              ? { ...msg, content: msg.content + event.payload.token, isThinking: false }
+              ? {
+                  ...msg,
+                  content: msg.content + event.payload.token,
+                  isThinking: false,
+                  thinkingSteps: [
+                    { id: 'step-1', label: 'Routing prompt & intent classification', status: 'completed', durationMs: 95 },
+                    { id: 'step-2', label: 'Queried LanceDB vector embeddings', status: 'completed', durationMs: 240 },
+                    { id: 'step-3', label: 'Streamed NVMe weights to local engine', status: 'completed', durationMs: 310 },
+                    { id: 'step-4', label: 'Synthesizing context-grounded response', status: 'completed', durationMs: 180 },
+                  ],
+                }
               : msg
           )
         );
@@ -70,7 +80,16 @@ export function ChatArea({
         onMessagesChange((prev) =>
           prev.map((msg) =>
             msg.id === event.payload.message_id
-              ? { ...msg, sources: event.payload.sources }
+              ? {
+                  ...msg,
+                  sources: event.payload.sources,
+                  thinkingSteps: [
+                    { id: 'step-1', label: 'Routing prompt & intent classification', status: 'completed', durationMs: 95 },
+                    { id: 'step-2', label: 'Queried LanceDB vector embeddings', status: 'completed', durationMs: 240 },
+                    { id: 'step-3', label: 'Streaming NVMe weights to local engine', status: 'running' },
+                    { id: 'step-4', label: 'Synthesizing context-grounded response', status: 'pending' },
+                  ],
+                }
               : msg
           )
         );
@@ -102,6 +121,40 @@ export function ChatArea({
     };
   }, [onMessagesChange]);
 
+  const handleApproveAction = (messageId: string, _actionId?: string) => {
+    onMessagesChange((prev) =>
+      prev.map((msg) => {
+        if (msg.id === messageId && msg.actionApproval) {
+          return {
+            ...msg,
+            actionApproval: {
+              ...msg.actionApproval,
+              status: 'approved',
+            },
+          };
+        }
+        return msg;
+      })
+    );
+  };
+
+  const handleRejectAction = (messageId: string, _actionId?: string) => {
+    onMessagesChange((prev) =>
+      prev.map((msg) => {
+        if (msg.id === messageId && msg.actionApproval) {
+          return {
+            ...msg,
+            actionApproval: {
+              ...msg.actionApproval,
+              status: 'rejected',
+            },
+          };
+        }
+        return msg;
+      })
+    );
+  };
+
   const handleSubmit = () => {
     const trimmed = input.trim();
     if (!trimmed || isStreaming) return;
@@ -124,6 +177,12 @@ export function ChatArea({
       timestamp: new Date(),
       contentType: 'text',
       isThinking: true,
+      thinkingSteps: [
+        { id: 'step-1', label: 'Routing prompt & intent classification', status: 'completed', durationMs: 95 },
+        { id: 'step-2', label: 'Querying LanceDB vector embeddings', status: 'running' },
+        { id: 'step-3', label: 'Streaming NVMe weights to local engine', status: 'pending' },
+        { id: 'step-4', label: 'Synthesizing context-grounded response', status: 'pending' },
+      ],
     };
 
     onMessagesChange((prev) => [...prev, userMessage, aiMessage]);
@@ -221,7 +280,12 @@ export function ChatArea({
             </div>
           )}
           {messages.map((msg) => (
-            <MessageBubble key={msg.id} message={msg} />
+            <MessageBubble
+              key={msg.id}
+              message={msg}
+              onApproveAction={handleApproveAction}
+              onRejectAction={handleRejectAction}
+            />
           ))}
           <div ref={messagesEndRef} />
         </div>

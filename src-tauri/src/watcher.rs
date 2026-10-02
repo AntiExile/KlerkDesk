@@ -172,22 +172,53 @@ impl WatcherState {
                             }
 
                             // Trigger RAG Ingestion
+                            let mut supported_files = Vec::new();
                             for path_str in event.paths {
                                 let path = PathBuf::from(path_str);
-                                // Note: In a real app we should verify it's a file, but notify gives us the exact path.
-                                // We also might want to check the extension first.
-                                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-                                if !["txt", "md", "csv", "json", "pdf"].contains(&ext.as_str()) {
-                                    continue;
+                                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                                if crate::rag::ingest::is_supported_extension(ext) {
+                                    supported_files.push(path);
                                 }
+                            }
 
+                            if !supported_files.is_empty() {
                                 let db_conn = app_handle.state::<std::sync::Arc<lancedb::connection::Connection>>().inner().clone();
                                 let embedder = app_handle.state::<std::sync::Arc<crate::rag::embed::Embedder>>().inner().clone();
+                                let app_handle_clone = app_handle.clone();
 
                                 tauri::async_runtime::spawn(async move {
-                                    if let Err(e) = crate::rag::ingest::process_file(&path, &embedder, &db_conn).await {
-                                        log::error!("[Terra] Failed to ingest {:?}: {}", path, e);
+                                    let total = supported_files.len();
+                                    let _ = app_handle_clone.emit("indexing-progress", serde_json::json!({
+                                        "completed": 0,
+                                        "total": total,
+                                        "currentFile": ""
+                                    }));
+
+                                    for (i, path) in supported_files.into_iter().enumerate() {
+                                        let file_name = path
+                                            .file_name()
+                                            .and_then(|n| n.to_str())
+                                            .unwrap_or("")
+                                            .to_string();
+
+                                        let _ = app_handle_clone.emit("indexing-progress", serde_json::json!({
+                                            "completed": i,
+                                            "total": total,
+                                            "currentFile": file_name
+                                        }));
+
+                                        if let Err(e) = crate::rag::ingest::process_file(&path, &embedder, &db_conn).await {
+                                            log::error!("[Terra] Failed to ingest {:?}: {}", path, e);
+                                        }
+
+                                        let _ = app_handle_clone.emit("indexing-progress", serde_json::json!({
+                                            "completed": i + 1,
+                                            "total": total,
+                                            "currentFile": file_name
+                                        }));
                                     }
+
+                                    let _ = app_handle_clone.emit("indexing-done", serde_json::json!({ "totalFiles": total }));
                                 });
                             }
                         }
