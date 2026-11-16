@@ -1,30 +1,37 @@
-import { useState } from 'react';
-import { ShieldAlert, ShieldCheck, Check, X, Terminal, Loader2, Sparkles } from 'lucide-react';
+'use client';
+
+import { useEffect, useState } from 'react';
+import { ShieldAlert, ShieldCheck, Check, X, Loader2 } from 'lucide-react';
 import type { ActionApprovalData } from '@/types';
 
 export interface ActionApprovalProps extends Partial<ActionApprovalData> {
   onApprove?: (actionId?: string) => void | Promise<void>;
   onReject?: (actionId?: string) => void | Promise<void>;
+  disabled?: boolean;
   className?: string;
 }
 
 export function ActionApproval({
   id = 'act-1',
-  title = 'Execute Data Ingestion Script',
-  description = 'The assistant proposed executing an automated local synchronization procedure on the target system.',
+  title = 'Approval Shield',
+  description = 'Submission pauses in pending_approval until you sign off.',
   command,
   targetResource,
   riskLevel = 'medium',
-  confidenceScore = 0.94,
   status: initialStatus = 'pending',
   onApprove,
   onReject,
+  disabled = false,
   className = '',
 }: ActionApprovalProps) {
-  const [currentStatus, setCurrentStatus] = useState<'pending' | 'approved' | 'rejected' | 'executing'>(
-    initialStatus
-  );
+  const [currentStatus, setCurrentStatus] = useState<
+    'pending' | 'approved' | 'rejected' | 'executing'
+  >(initialStatus);
   const [isProcessing, setIsProcessing] = useState(false);
+
+  useEffect(() => {
+    setCurrentStatus(initialStatus);
+  }, [initialStatus]);
 
   const handleApprove = async () => {
     setIsProcessing(true);
@@ -53,159 +60,95 @@ export function ActionApproval({
     }
   };
 
-  // Risk meta styles
-  const riskMeta = {
-    critical: {
-      badge: 'bg-rose-500/15 border-rose-500/30 text-rose-400',
-      border: 'border-rose-900/60',
-      icon: ShieldAlert,
-      label: 'Critical Risk',
-    },
-    high: {
-      badge: 'bg-orange-500/15 border-orange-500/30 text-orange-400',
-      border: 'border-orange-900/60',
-      icon: ShieldAlert,
-      label: 'High Risk',
-    },
-    medium: {
-      badge: 'bg-amber-500/15 border-amber-500/30 text-amber-400',
-      border: 'border-amber-900/50',
-      icon: ShieldAlert,
-      label: 'Medium Risk',
-    },
-    low: {
-      badge: 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400',
-      border: 'border-emerald-900/50',
-      icon: ShieldCheck,
-      label: 'Low Risk',
-    },
-  }[riskLevel];
-
-  const RiskIcon = riskMeta.icon;
+  const isBlocked = riskLevel === 'high' || riskLevel === 'critical';
 
   return (
     <div
-      className={`w-full max-w-xl overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/95 shadow-xl transition-all duration-200 my-3 ${riskMeta.border} ${className}`}
+      className={`w-full overflow-hidden rounded-2xl border border-white/[0.08] bg-[#141416] ${className}`}
     >
-      {/* Header with Risk and Confidence Indicators */}
-      <div className="flex items-center justify-between px-4 py-2.5 bg-zinc-900/60 border-b border-zinc-800/80">
-        <div className="flex items-center gap-2">
-          <span
-            className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[10.5px] font-semibold tracking-wider uppercase ${riskMeta.badge}`}
-          >
-            <RiskIcon className="size-3" />
-            {riskMeta.label}
-          </span>
-          <span className="text-[11px] text-zinc-500 font-medium">
-            Human-in-the-Loop Review
-          </span>
-        </div>
-        <div className="flex items-center gap-1 text-[11px] font-mono text-zinc-400">
-          <Sparkles className="size-3 text-accent-400" />
-          <span>{Math.round(confidenceScore * 100)}% Confidence</span>
-        </div>
-      </div>
-
-      {/* Main Body */}
-      <div className="p-4 space-y-3">
-        <div>
-          <h4 className="text-[13.5px] font-semibold text-zinc-100 tracking-tight">
-            {title}
-          </h4>
-          {description && (
-            <p className="text-xs text-zinc-400 leading-relaxed mt-1">
-              {description}
-            </p>
-          )}
+      <div className="p-3.5 space-y-2.5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-2.5 min-w-0">
+            {isBlocked ? (
+              <ShieldAlert className="size-4 text-amber-400 shrink-0 mt-0.5" />
+            ) : (
+              <ShieldCheck className="size-4 text-emerald-400 shrink-0 mt-0.5" />
+            )}
+            <div className="min-w-0">
+              <div className="text-xs font-semibold text-zinc-100">{title}</div>
+              {description && (
+                <p className="text-[11.5px] text-zinc-400 mt-0.5 m-0">
+                  {description}
+                </p>
+              )}
+            </div>
+          </div>
         </div>
 
-        {/* Command / Resource Snippet Box */}
         {(command || targetResource) && (
-          <div className="space-y-1.5">
-            {targetResource && (
-              <div className="text-[11px] text-zinc-500 font-mono">
-                Target: <span className="text-zinc-300">{targetResource}</span>
-              </div>
-            )}
-            {command && (
-              <div className="rounded-lg bg-zinc-900/90 border border-zinc-800/90 p-2.5 font-mono text-[11.5px] text-zinc-300 flex items-start gap-2 overflow-x-auto">
-                <Terminal className="size-3.5 text-accent-400 mt-0.5 shrink-0" />
-                <code className="text-zinc-200 select-all whitespace-pre">
-                  {command}
-                </code>
-              </div>
-            )}
+          <div className="rounded-xl bg-[#0C0C0D] border border-white/[0.06] px-3 py-2 font-mono text-[11px] text-zinc-400 truncate">
+            {targetResource || command}
           </div>
         )}
       </div>
 
-      {/* Footer Actions / State Status */}
-      <div className="flex items-center justify-between gap-3 px-4 py-3 bg-zinc-900/40 border-t border-zinc-800/70">
+      <div className="px-3.5 py-2.5 border-t border-white/[0.06] bg-[#111113] flex items-center justify-between gap-2">
         {currentStatus === 'pending' && (
           <>
-            <span className="text-[11px] text-zinc-500 font-medium">
-              Requires operator clearance to proceed.
+            <span className="text-[11px] text-zinc-500">
+              Waiting on your yes
             </span>
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={handleReject}
                 disabled={isProcessing}
-                className="inline-flex items-center justify-center gap-1.5 h-8 px-3.5 rounded-lg border border-zinc-700/80 bg-zinc-800/80 hover:bg-zinc-700 hover:text-white text-xs font-medium text-zinc-300 transition-colors disabled:opacity-50 cursor-pointer"
+                className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-[11px] font-medium text-zinc-300 cursor-pointer"
               >
-                <X className="size-3.5" />
-                Reject
+                <X className="size-3" />
+                Hold
               </button>
               <button
                 type="button"
                 onClick={handleApprove}
-                disabled={isProcessing}
-                className="inline-flex items-center justify-center gap-1.5 h-8 px-4 rounded-lg bg-accent-600 hover:bg-accent-500 active:scale-[0.98] border border-accent-400/40 text-xs font-semibold text-white shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+                disabled={isProcessing || disabled}
+                className="inline-flex items-center gap-1 px-3.5 py-1 rounded-full bg-zinc-100 hover:bg-white text-zinc-950 text-[11px] font-semibold border-none cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {isProcessing ? (
-                  <>
-                    <Loader2 className="size-3.5 animate-spin" />
-                    Executing...
-                  </>
+                  <Loader2 className="size-3 animate-spin" />
                 ) : (
-                  <>
-                    <Check className="size-3.5" />
-                    Approve Execution
-                  </>
+                  <Check className="size-3" />
                 )}
+                Approve &amp; Submit
               </button>
             </div>
           </>
         )}
 
         {currentStatus === 'executing' && (
-          <div className="flex items-center gap-2 text-xs text-accent-400 font-medium w-full justify-center py-0.5">
-            <Loader2 className="size-3.5 animate-spin" />
-            Executing approved action on host system...
+          <div className="flex items-center gap-2 text-[11px] text-zinc-300 w-full justify-center">
+            <Loader2 className="size-3 animate-spin" />
+            <span>Executing approved submission...</span>
           </div>
         )}
 
         {currentStatus === 'approved' && (
-          <div className="flex items-center justify-between w-full text-xs">
-            <span className="inline-flex items-center gap-1.5 text-emerald-400 font-medium">
+          <div className="flex items-center justify-between w-full text-[11px] text-emerald-400">
+            <span className="inline-flex items-center gap-1.5 font-medium">
               <Check className="size-3.5" />
-              Action Approved & Executed
+              Signed off &amp; executed
             </span>
-            <span className="font-mono text-[11px] text-zinc-500">
-              Clearance logged
-            </span>
+            <span className="font-mono text-zinc-500">Committed</span>
           </div>
         )}
 
         {currentStatus === 'rejected' && (
-          <div className="flex items-center justify-between w-full text-xs">
-            <span className="inline-flex items-center gap-1.5 text-rose-400 font-medium">
-              <X className="size-3.5" />
-              Action Rejected by Operator
+          <div className="flex items-center justify-between w-full text-[11px] text-zinc-400">
+            <span className="inline-flex items-center gap-1.5">
+              <X className="size-3.5 text-rose-400" />
+              Held by operator
             </span>
-            <span className="font-mono text-[11px] text-zinc-500">
-              Execution blocked
-            </span>
+            <span className="font-mono text-zinc-600">Shield closed</span>
           </div>
         )}
       </div>

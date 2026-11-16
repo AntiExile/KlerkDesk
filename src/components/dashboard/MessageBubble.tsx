@@ -1,3 +1,5 @@
+'use client';
+
 import { motion } from 'framer-motion';
 import type { Message } from '@/types';
 import { ThinkingTrace } from '@/components/chat/ThinkingTrace';
@@ -6,8 +8,8 @@ import { ActionApproval } from '@/components/chat/ActionApproval';
 
 interface MessageBubbleProps {
   message: Message;
-  onApproveAction?: (messageId: string, actionId?: string) => void;
-  onRejectAction?: (messageId: string, actionId?: string) => void;
+  onApproveAction?: (messageId: string, actionId?: string) => void | Promise<void>;
+  onRejectAction?: (messageId: string, actionId?: string) => void | Promise<void>;
 }
 
 export function MessageBubble({
@@ -19,89 +21,61 @@ export function MessageBubble({
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 8 }}
+      initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.25, ease: 'easeOut' }}
-      className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-5 w-full`}
+      transition={{ type: 'spring', stiffness: 400, damping: 34 }}
+      className={`flex ${isUser ? 'justify-end' : 'justify-start'} w-full`}
     >
-      <div
-        className={`
-          flex gap-3 max-w-[88%] lg:max-w-[82%]
-          ${isUser ? 'flex-row-reverse' : 'flex-row'}
-        `}
-      >
-        {/* Avatar */}
-        {!isUser && (
-          <div className="shrink-0 size-7 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center mt-1 shadow-sm">
-            <span className="text-accent-400 text-xs font-bold">T</span>
+      <div className="flex flex-col min-w-0 max-w-xl space-y-2">
+        {!isUser && (message.isThinking || message.thinkingSteps || message.thinkingDuration) && (
+          <ThinkingTrace
+            isThinking={message.isThinking}
+            steps={message.thinkingSteps}
+            totalDurationMs={message.thinkingDuration}
+          />
+        )}
+
+        {!isUser && message.sources && message.sources.length > 0 && (
+          <ContextCard citations={message.sources} />
+        )}
+
+        {(message.content || (!message.isThinking && !message.actionApproval)) && (
+          <div
+            className={`
+              rounded-2xl px-4 py-3 text-[13.5px] leading-relaxed
+              ${
+                isUser
+                  ? 'bg-[#27272A] text-zinc-100 border border-white/10'
+                  : 'bg-[#1C1C1F] text-zinc-200 border border-white/[0.06]'
+              }
+            `}
+          >
+            {message.contentType === 'code' ? (
+              <pre className="font-mono text-xs bg-[#0C0C0D] rounded-xl p-3 overflow-x-auto my-1 border border-white/[0.06] text-zinc-200">
+                <code>{message.content}</code>
+              </pre>
+            ) : (
+              <div className="whitespace-pre-wrap select-text">
+                {renderMarkdownLite(message.content)}
+              </div>
+            )}
+
+            {!isUser && message.modelUsed && (
+              <div className="mt-2 pt-1.5 border-t border-white/[0.05] flex items-center justify-between text-[10.5px] font-mono text-zinc-500">
+                <span>{message.modelUsed}</span>
+                <span className="tabular-nums">{formatTime(message.timestamp)}</span>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Bubble container */}
-        <div className="flex flex-col min-w-0 flex-1 space-y-2.5">
-          {/* 1. Thinking Primitive (Accordion with elapsed time & sequential inference steps) */}
-          {!isUser && (message.isThinking || message.thinkingSteps || message.thinkingDuration) && (
-            <ThinkingTrace
-              isThinking={message.isThinking}
-              steps={message.thinkingSteps}
-              totalDurationMs={message.thinkingDuration}
-            />
-          )}
-
-          {/* 2. Context Cards Primitive (Document citations just above AI's text response) */}
-          {!isUser && message.sources && message.sources.length > 0 && (
-            <ContextCard citations={message.sources} />
-          )}
-
-          {/* 3. Message Body */}
-          {(message.content || (!message.isThinking && !message.actionApproval)) && (
-            <div
-              className={`
-                rounded-xl px-4 py-3 text-sm leading-relaxed
-                ${isUser
-                  ? 'bg-accent-600/20 text-zinc-100 border border-accent-500/30'
-                  : 'bg-zinc-950/80 text-zinc-200 border border-zinc-800/80 shadow-sm'
-                }
-              `}
-            >
-              {message.contentType === 'code' ? (
-                <pre className="font-mono text-xs bg-zinc-900/90 rounded-lg p-3 overflow-x-auto my-1 border border-zinc-800 text-zinc-200">
-                  <code>{message.content}</code>
-                </pre>
-              ) : message.contentType === 'table' ? (
-                <div className="overflow-x-auto my-1">
-                  <div
-                    className="text-xs [&_table]:w-full [&_table]:border-collapse [&_th]:text-left [&_th]:px-3 [&_th]:py-2 [&_th]:border-b [&_th]:border-zinc-800 [&_th]:text-zinc-400 [&_th]:font-medium [&_td]:px-3 [&_td]:py-2 [&_td]:border-b [&_td]:border-zinc-900 [&_td]:text-zinc-200"
-                    dangerouslySetInnerHTML={{ __html: message.content }}
-                  />
-                </div>
-              ) : (
-                <div className="whitespace-pre-wrap select-text">
-                  {renderMarkdownLite(message.content)}
-                </div>
-              )}
-
-              {/* Timestamp */}
-              <div
-                className={`
-                  text-[10px] font-mono mt-2
-                  ${isUser ? 'text-accent-400/60 text-right' : 'text-zinc-500'}
-                `}
-              >
-                {formatTime(message.timestamp)}
-              </div>
-            </div>
-          )}
-
-          {/* 4. Action Approval Primitive (Human-in-the-loop workflow card) */}
-          {!isUser && message.actionApproval && (
-            <ActionApproval
-              {...message.actionApproval}
-              onApprove={(actionId) => onApproveAction?.(message.id, actionId)}
-              onReject={(actionId) => onRejectAction?.(message.id, actionId)}
-            />
-          )}
-        </div>
+        {!isUser && message.actionApproval && (
+          <ActionApproval
+            {...message.actionApproval}
+            onApprove={(actionId) => onApproveAction?.(message.id, actionId)}
+            onReject={(actionId) => onRejectAction?.(message.id, actionId)}
+          />
+        )}
       </div>
     </motion.div>
   );
@@ -116,7 +90,6 @@ function formatTime(d: Date | string): string {
   }
 }
 
-/** Lightweight markdown renderer for bold, italic, and inline code */
 function renderMarkdownLite(text: string) {
   const parts = text.split(/(```[\s\S]*?```|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g);
 
@@ -126,7 +99,7 @@ function renderMarkdownLite(text: string) {
       return (
         <pre
           key={i}
-          className="font-mono text-xs bg-zinc-900 border border-zinc-800 rounded-lg p-3 overflow-x-auto my-2 text-zinc-200"
+          className="font-mono text-xs bg-[#0C0C0D] border border-white/[0.06] rounded-xl p-3 overflow-x-auto my-2 text-zinc-200"
         >
           <code>{code}</code>
         </pre>
@@ -136,7 +109,7 @@ function renderMarkdownLite(text: string) {
       return (
         <code
           key={i}
-          className="font-mono text-xs bg-zinc-900/90 text-accent-300 px-1.5 py-0.5 rounded border border-zinc-800/80"
+          className="font-mono text-[12px] bg-[#0C0C0D] text-zinc-200 px-1.5 py-0.5 rounded border border-white/[0.08]"
         >
           {part.slice(1, -1)}
         </code>

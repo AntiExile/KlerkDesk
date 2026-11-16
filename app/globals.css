@@ -1,0 +1,271 @@
+@import "tailwindcss";
+
+/*
+ * MundusMK Tender Ops — Calm Messenger Design System
+ * Matte obsidian canvas (#0C0C0D), subtle sidebar (#111113), soft bubbles (#1C1C1F),
+ * 1px solid rgba(255,255,255,0.06) hairlines, and tabular-nums Rand formatting.
+ */
+
+@theme {
+  /* ── Neutral Accent Scale (Zinc / Subtle Slate) ── */
+  --color-accent-50: #fafafa;
+  --color-accent-100: #f4f4f5;
+  --color-accent-200: #e4e4e7;
+  --color-accent-300: #d4d4d8;
+  --color-accent-400: #a1a1aa;
+  --color-accent-500: #71717a;
+  --color-accent-600: #52525b;
+  --color-accent-700: #3f3f46;
+  --color-accent-800: #27272a;
+  --color-accent-900: #18181b;
+
+  /* ── Surface Colors ── */
+  --color-surface-primary: #0C0C0D;
+  --color-surface-secondary: #111113;
+  --color-surface-tertiary: #18181B;
+  --color-surface-elevated: #1C1C1F;
+  --color-surface-modal: #141416;
+  --color-surface-overlay: rgba(0, 0, 0, 0.7);
+
+  /* ── Border Colors ── */
+  --color-border-default: rgba(255, 255, 255, 0.06);
+  --color-border-subtle: rgba(255, 255, 255, 0.05);
+  --color-border-accent: rgba(255, 255, 255, 0.14);
+
+  /* ── Text Colors ── */
+  --color-text-primary: #f4f4f5;
+  --color-text-secondary: #a1a1aa;
+  --color-text-tertiary: #71717a;
+  --color-text-accent: #e4e4e7;
+
+  /* ── Status Colors ── */
+  --color-status-success: #22c55e;
+  --color-status-warning: #eab308;
+  --color-status-error: #ef4444;
+
+  /* ── Font ── */
+  --font-sans: var(--font-geist-sans), var(--font-inter), ui-sans-serif, system-ui,
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, "SF Mono",
+    Menlo, Consolas, monospace;
+
+  /* ── Sidebar ── */
+  --sidebar-width: 240px;
+}
+
+/* ── Root Browser UI Theming ── */
+
+:root {
+  color-scheme: dark;
+  accent-color: #a1a1aa;
+  scrollbar-color: #27272a transparent;
+}
+
+/* ── Base Styles ── */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--color-text-primary);
+  background-color: var(--color-surface-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* ── Scrollbar Styling ── */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+/* ── Selection ── */
+
+::selection {
+  background-color: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+}
+
+/* ── Native Form Validity & Controls ── */
+
+input:not(input[type="range"]):user-invalid,
+textarea:user-invalid,
+select:user-invalid {
+  border-color: var(--color-status-error);
+}
+
+input:not(input[type="range"]):user-valid {
+  border-color: rgba(34, 197, 94, 0.35);
+}
+
+textarea {
+  resize: vertical;
+}
+
+/* ── Modal Scroll Containment ── */
+
+dialog:modal {
+  overscroll-behavior: contain;
+}
+
+dialog::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+
+/* ── Focus ring ── */
+
+*:focus-visible:not(input):not(textarea):not(select) {
+  outline: 2px solid rgba(255, 255, 255, 0.35);
+  outline-offset: 2px;
+}
+
+/* ── Soft Messenger Bubble & Surface Helpers ── */
+
+.messenger-bubble {
+  background-color: #1C1C1F;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* ── Responsive BoQ Table (Container Query + Sticky Headers) ── */
+
+.table-wrapper {
+  overflow: auto;
+  max-inline-size: 100%;
+  max-block-size: min(440px, 60vh);
+  container-type: inline-size;
+}
+
+.boq-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  --label-1: "Code";
+  --label-2: "Item Description";
+  --label-3: "Unit";
+  --label-4: "Qty";
+  --label-5: "Rate (R)";
+  --label-6: "Total (R)";
+}
+
+.boq-table thead {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 2;
+  background: #141416;
+}
+
+.boq-table tbody th {
+  position: sticky;
+  inset-inline-start: 0;
+  z-index: 1;
+  background: #111113;
+}
+
+@container (width < 520px) {
+  .boq-table,
+  .boq-table thead,
+  .boq-table tbody,
+  .boq-table tr,
+  .boq-table th,
+  .boq-table td {
+    display: block;
+  }
+
+  .boq-table thead {
+    display: none;
+  }
+
+  .boq-table tr {
+    margin-block-end: 0.75rem;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.75rem;
+    background: #141416;
+    overflow: hidden;
+  }
+
+  .boq-table tbody th {
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 2;
+    background: #18181B;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 0.5rem 0.75rem;
+  }
+
+  .boq-table td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.45rem 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  }
+
+  .boq-table td:last-child {
+    border-bottom: none;
+  }
+
+  .boq-table td:nth-child(2)::before {
+    content: var(--label-2) ": ";
+    color: var(--color-text-tertiary);
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .boq-table td:nth-child(3)::before {
+    content: var(--label-3) ": ";
+    color: var(--color-text-tertiary);
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .boq-table td:nth-child(4)::before {
+    content: var(--label-4) ": ";
+    color: var(--color-text-tertiary);
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .boq-table td:nth-child(5)::before {
+    content: var(--label-5) ": ";
+    color: var(--color-text-tertiary);
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .boq-table td:nth-child(6)::before {
+    content: var(--label-6) ": ";
+    color: var(--color-text-tertiary);
+    font-size: 11px;
+    font-weight: 500;
+  }
+}

@@ -1,110 +1,74 @@
-import { useState, useEffect, useCallback } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-import { FolderOpen, Trash2, Plus, RefreshCw, Loader2 } from 'lucide-react';
-import type { IndexingProgress, IndexingDone } from '@/types';
+'use client';
 
-interface WatchedFolderInfo {
-  id: string;
-  name: string;
-  path: string;
-  addedAt: string;
-  fileCount: number;
-}
+import { useState, useEffect, type FormEvent } from 'react';
+import { CheckCircle2, Loader2, MapPin, MessageSquare, Shield } from 'lucide-react';
+import {
+  getContractorSettingsAction,
+  saveContractorSettingsAction,
+} from '@/app/actions/settings';
+
+const CIDB_GRADES = [
+  '1CE', '2CE', '3CE', '4CE', '5CE', '6CE PE', '7CE', '8CE', '9CE',
+  '4GB', '5GB', '6GB PE', '7GB',
+];
+
+const MUNICIPAL_REGIONS = [
+  'Oudtshoorn',
+  'George',
+  'Mossel Bay',
+  'Cape Town',
+  'Knysna',
+  'Bitou',
+  'Hessequa',
+  'Garden Route District',
+];
 
 export function DataSyncTab() {
-  const [folders, setFolders] = useState<WatchedFolderInfo[]>([]);
-  const [totalCount, setTotalCount] = useState(0);
+  const [companyName, setCompanyName] = useState('');
+  const [csdMaaaNumber, setCsdMaaaNumber] = useState('');
+  const [cidbGrade, setCidbGrade] = useState('6CE PE');
+  const [municipalRegions, setMunicipalRegions] = useState<string[]>([]);
+  const [whatsappNumber, setWhatsappNumber] = useState('');
   const [loading, setLoading] = useState(true);
-  const [adding, setAdding] = useState(false);
-  const [reindexing, setReindexing] = useState(false);
-  const [indexingProgress, setIndexingProgress] = useState<IndexingProgress | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [savedSuccess, setSavedSuccess] = useState(false);
 
-  const refreshData = useCallback(async () => {
-    try {
-      const [folderList, count] = await Promise.all([
-        invoke<WatchedFolderInfo[]>('get_watched_folders'),
-        invoke<number>('get_total_file_count'),
-      ]);
-      setFolders(folderList);
-      setTotalCount(count);
-    } catch (err) {
-      console.error('[Terra] Failed to fetch folders:', err);
-    } finally {
-      setLoading(false);
-    }
+  useEffect(() => {
+    getContractorSettingsAction()
+      .then((settings) => {
+        setCompanyName(settings.companyName);
+        setCsdMaaaNumber(settings.csdMaaaNumber);
+        setCidbGrade(settings.cidbGrade);
+        setMunicipalRegions(settings.municipalRegions);
+        setWhatsappNumber(settings.whatsappNumber);
+      })
+      .finally(() => setLoading(false));
   }, []);
 
-  const handleReindexAll = async () => {
-    setReindexing(true);
-    try {
-      await invoke<number>('reindex_all');
-      await refreshData();
-    } catch (err) {
-      console.error('[Terra] Failed to reindex all:', err);
-    } finally {
-      setReindexing(false);
-    }
+  const toggleRegion = (region: string) => {
+    setMunicipalRegions((prev) =>
+      prev.includes(region)
+        ? prev.filter((r) => r !== region)
+        : [...prev, region]
+    );
+    setSavedSuccess(false);
   };
 
-  // Load data on mount
-  useEffect(() => {
-    refreshData();
-  }, [refreshData]);
-
-  // Listen for FS change and indexing events to refresh counts and show progress
-  useEffect(() => {
-    let unlistenProgress: (() => void) | undefined;
-    let unlistenDone: (() => void) | undefined;
-    let unlistenFsChange: (() => void) | undefined;
-
-    const setupListeners = async () => {
-      unlistenProgress = await listen<IndexingProgress>('indexing-progress', (event) => {
-        setIndexingProgress(event.payload);
-        setReindexing(true);
-      });
-
-      unlistenDone = await listen<IndexingDone>('indexing-done', () => {
-        setIndexingProgress(null);
-        setReindexing(false);
-        refreshData();
-      });
-
-      unlistenFsChange = await listen('terra://fs-change', () => {
-        refreshData();
-      });
-    };
-
-    setupListeners();
-
-    return () => {
-      if (unlistenProgress) unlistenProgress();
-      if (unlistenDone) unlistenDone();
-      if (unlistenFsChange) unlistenFsChange();
-    };
-  }, [refreshData]);
-
-  const handleAddFolder = async () => {
-    setAdding(true);
+  const handleSave = async (e: FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setSavedSuccess(false);
     try {
-      const selectedPath = await invoke<string | null>('pick_folder');
-      if (selectedPath) {
-        await invoke<WatchedFolderInfo>('add_watched_folder', { path: selectedPath });
-        await refreshData();
-      }
-    } catch (err) {
-      console.error('[Terra] Failed to add folder:', err);
+      await saveContractorSettingsAction({
+        companyName,
+        csdMaaaNumber,
+        cidbGrade,
+        municipalRegions,
+        whatsappNumber,
+      });
+      setSavedSuccess(true);
     } finally {
-      setAdding(false);
-    }
-  };
-
-  const handleRemoveFolder = async (id: string) => {
-    try {
-      await invoke('remove_watched_folder', { id });
-      await refreshData();
-    } catch (err) {
-      console.error('[Terra] Failed to remove folder:', err);
+      setSaving(false);
     }
   };
 
@@ -117,134 +81,145 @@ export function DataSyncTab() {
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
+    <form onSubmit={handleSave} className="space-y-6">
       <div>
         <h3 className="text-sm font-semibold text-text-primary">
-          Watched Folders
+          Contractor Profile &amp; Municipal Targeting
         </h3>
         <p className="text-xs text-text-tertiary mt-1">
-          Terra monitors these folders and indexes documents into the local
-          vector database for retrieval.
+          Configure CIDB grading, target municipalities for portal scans, and WhatsApp alert routing.
         </p>
       </div>
 
-      {/* Folder List */}
-      <div className="space-y-2">
-        {folders.length === 0 ? (
-          <div className="text-center py-8 text-sm text-text-tertiary">
-            No folders added yet. Click "Add Folder" to get started.
-          </div>
-        ) : (
-          folders.map((folder) => (
-            <div
-              key={folder.id}
-              className="flex items-center gap-3 p-3 rounded-lg bg-surface-primary/50 border border-border-subtle group"
-            >
-              <div className="size-9 rounded-lg bg-surface-tertiary/50 flex items-center justify-center shrink-0">
-                <FolderOpen className="size-4 text-text-tertiary" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-text-primary truncate">
-                  {folder.name}
-                </div>
-                <div className="text-xs text-text-tertiary truncate">
-                  {folder.path}
-                </div>
-              </div>
-              <div className="text-right shrink-0 mr-2">
-                <div className="text-xs text-text-secondary">
-                  {folder.fileCount.toLocaleString()} files
-                </div>
-                <div className="text-[10px] text-text-tertiary">
-                  {formatDate(folder.addedAt)}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => handleRemoveFolder(folder.id)}
-                className="opacity-0 group-hover:opacity-100 transition-opacity size-7 rounded-md flex items-center justify-center hover:bg-status-error/10 text-text-tertiary hover:text-status-error cursor-pointer border-none bg-transparent"
-                title="Remove folder"
-              >
-                <Trash2 className="size-3.5" />
-              </button>
-            </div>
-          ))
-        )}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label
+            htmlFor="company-name"
+            className="block text-xs font-medium text-text-secondary mb-1.5"
+          >
+            Company Legal Name
+          </label>
+          <input
+            id="company-name"
+            type="text"
+            required
+            value={companyName}
+            onChange={(e) => setCompanyName(e.target.value)}
+            className="w-full rounded-lg bg-[#09090B] border border-white/10 px-3 py-2 text-xs text-text-primary outline-none focus:border-accent-500"
+          />
+        </div>
+
+        <div>
+          <label
+            htmlFor="csd-number"
+            className="block text-xs font-medium text-text-secondary mb-1.5"
+          >
+            CSD Supplier Number (MAAA)
+          </label>
+          <input
+            id="csd-number"
+            type="text"
+            required
+            value={csdMaaaNumber}
+            onChange={(e) => setCsdMaaaNumber(e.target.value)}
+            className="w-full rounded-lg bg-[#09090B] border border-white/10 px-3 py-2 text-xs text-text-primary font-mono outline-none focus:border-accent-500"
+          />
+        </div>
       </div>
 
-      {/* Add Folder */}
-      <button
-        type="button"
-        onClick={handleAddFolder}
-        disabled={adding}
-        className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-dashed border-border-default text-sm text-text-tertiary hover:text-text-secondary hover:border-accent-600/40 hover:bg-accent-600/5 transition-colors duration-150 cursor-pointer bg-transparent disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        {adding ? (
-          <Loader2 className="size-4 animate-spin" />
-        ) : (
-          <Plus className="size-4" />
-        )}
-        {adding ? 'Selecting...' : 'Add Folder'}
-      </button>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label
+            htmlFor="cidb-grade"
+            className="flex items-center gap-1.5 text-xs font-medium text-text-secondary mb-1.5"
+          >
+            <Shield className="size-3.5 text-accent-400" />
+            CIDB Contractor Grade
+          </label>
+          <select
+            id="cidb-grade"
+            value={cidbGrade}
+            onChange={(e) => setCidbGrade(e.target.value)}
+            className="w-full rounded-lg bg-[#09090B] border border-white/10 px-3 py-2 text-xs text-text-primary outline-none focus:border-accent-500"
+          >
+            {CIDB_GRADES.map((grade) => (
+              <option key={grade} value={grade}>
+                {grade}
+              </option>
+            ))}
+          </select>
+        </div>
 
-      {/* Summary */}
-      <div className="flex items-center justify-between pt-2 border-t border-border-subtle">
-        <span className="text-xs text-text-tertiary">
-          {totalCount.toLocaleString()} total documents indexed
-        </span>
+        <div>
+          <label
+            htmlFor="whatsapp-number"
+            className="flex items-center gap-1.5 text-xs font-medium text-text-secondary mb-1.5"
+          >
+            <MessageSquare className="size-3.5 text-emerald-400" />
+            WhatsApp Notification Number
+          </label>
+          <input
+            id="whatsapp-number"
+            type="tel"
+            required
+            value={whatsappNumber}
+            onChange={(e) => setWhatsappNumber(e.target.value)}
+            placeholder="+27825550148"
+            className="w-full rounded-lg bg-[#09090B] border border-white/10 px-3 py-2 text-xs text-text-primary font-mono outline-none focus:border-accent-500"
+          />
+        </div>
+      </div>
+
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <span className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
+            <MapPin className="size-3.5 text-accent-400" />
+            Municipal Regions Monitored ({municipalRegions.length} selected)
+          </span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {MUNICIPAL_REGIONS.map((region) => {
+            const checked = municipalRegions.includes(region);
+            return (
+              <label
+                key={region}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs cursor-pointer transition-colors ${
+                  checked
+                    ? 'border-accent-500/50 bg-accent-500/10 text-text-primary'
+                    : 'border-white/10 bg-[#09090B]/60 text-text-secondary hover:border-white/20'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggleRegion(region)}
+                  className="rounded border-white/20"
+                />
+                <span className="truncate">{region}</span>
+              </label>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between pt-3 border-t border-white/10">
+        <div className="text-xs">
+          {savedSuccess && (
+            <span className="inline-flex items-center gap-1.5 text-emerald-400">
+              <CheckCircle2 className="size-3.5" />
+              Profile &amp; regions saved
+            </span>
+          )}
+        </div>
         <button
-          type="button"
-          onClick={handleReindexAll}
-          disabled={reindexing}
-          className="flex items-center gap-1.5 text-xs text-accent-400 hover:text-accent-300 transition-colors cursor-pointer bg-transparent border-none disabled:opacity-50 disabled:cursor-not-allowed"
+          type="submit"
+          disabled={saving}
+          className="px-4 py-2 rounded-lg bg-accent-600 hover:bg-accent-500 text-white text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer border-none disabled:opacity-50"
         >
-          <RefreshCw className={`size-3 ${reindexing ? 'animate-spin' : ''}`} />
-          {reindexing ? 'Re-indexing...' : 'Re-index all'}
+          {saving && <Loader2 className="size-3.5 animate-spin" />}
+          <span>{saving ? 'Saving...' : 'Save Contractor Profile'}</span>
         </button>
       </div>
-
-      {/* Real-time Ingestion Progress Card */}
-      {indexingProgress && indexingProgress.total > 0 && (
-        <div className="p-3 bg-surface-tertiary/60 border border-border-subtle rounded-lg space-y-2">
-          <div className="flex items-center justify-between text-xs">
-            <span className="font-medium text-text-primary flex items-center gap-1.5">
-              <RefreshCw className="size-3 text-accent-400 animate-spin flex-shrink-0" />
-              Indexing Documents ({indexingProgress.completed} / {indexingProgress.total})
-            </span>
-            <span className="font-mono text-text-tertiary">
-              {Math.round((indexingProgress.completed / indexingProgress.total) * 100)}%
-            </span>
-          </div>
-          {indexingProgress.currentFile && (
-            <p className="text-[11px] text-text-tertiary truncate" title={indexingProgress.currentFile}>
-              {indexingProgress.currentFile}
-            </p>
-          )}
-          <div className="w-full bg-surface-primary rounded-full h-1.5 overflow-hidden">
-            <div
-              className="bg-accent-500 h-full transition-all duration-200 ease-out"
-              style={{
-                width: `${Math.min(100, Math.round((indexingProgress.completed / indexingProgress.total) * 100))}%`,
-              }}
-            />
-          </div>
-        </div>
-      )}
-    </div>
+    </form>
   );
-}
-
-function formatDate(isoString: string): string {
-  try {
-    const date = new Date(isoString);
-    return date.toLocaleDateString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  } catch {
-    return 'Unknown';
-  }
 }

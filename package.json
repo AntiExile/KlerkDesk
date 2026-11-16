@@ -1,36 +1,35 @@
 {
-  "name": "terra",
+  "name": "mundus-tender-ops",
   "private": true,
   "version": "0.1.0",
-  "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
-    "tauri": "tauri",
-    "clean": "cd src-tauri && cargo clean && cd ..",
-    "kill-engine": "node scripts/kill-engine.cjs"
+    "dev": "next dev --turbopack",
+    "build": "next build",
+    "start": "next start",
+    "worker:scan": "bun run workers/scan-portals.ts"
   },
   "dependencies": {
-    "@tailwindcss/vite": "^4.3.3",
-    "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-dialog": "^2.7.3",
-    "@tauri-apps/plugin-opener": "^2",
-    "@tauri-apps/plugin-shell": "^2.3.6",
-    "@tauri-apps/plugin-store": "^2.4.4",
+    "@boatdev/sdk": "^1.13.0",
+    "@browserbasehq/stagehand": "latest",
+    "@openrouter/ai-sdk-provider": "latest",
+    "ai": "latest",
+    "convex": "^1.50.0",
     "framer-motion": "^13.2.0",
     "lucide-react": "^1.45.0",
+    "next": "^15.3.0",
+    "pdf-lib": "^1.17.1",
+    "playwright-core": "latest",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "tailwindcss": "^4.3.3"
+    "unpdf": "latest",
+    "zod": "^3.24.0"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2",
-    "@types/node": "^26.5.1",
+    "@tailwindcss/postcss": "^4.1.0",
+    "@types/node": "^22.0.0",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
-    "@vitejs/plugin-react": "^6.0.2",
-    "typescript": "~6.0.3",
-    "vite": "^8.0.16"
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.8.0"
   }
 }

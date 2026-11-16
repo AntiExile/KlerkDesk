@@ -1,449 +1,298 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+'use client';
+
+import { useState, useRef, useEffect } from 'react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
-  FolderOpen,
-  Trash2,
+  Search,
   Plus,
-  Loader2,
+  Inbox,
+  Sparkles,
+  FileUp,
+  MonitorPlay,
   Settings,
-  Filter,
-  MessageSquare,
-  Pencil,
-  ChevronDown,
-  ChevronRight,
+  ShieldCheck,
 } from 'lucide-react';
-import { StatusDot } from '@/components/ui/StatusDot';
-import { IconButton } from '@/components/ui/IconButton';
-import type { ConversationSummary, IndexingProgress, IndexingDone } from '@/types';
+import { formatMillionsRand, formatShortClosingDate, getShortTenderLabel } from '@/lib/format';
+import type { ComplianceSummary, TenderMatch } from '@/types';
 
 interface SidebarProps {
+  compliance: ComplianceSummary;
+  tenders: TenderMatch[];
+  activeBidId?: string;
   onOpenSettings: () => void;
-  activeFolderPaths: string[];
-  onToggleFolder: (path: string) => void;
-  onFolderRemoved: (path: string) => void;
-  conversations: ConversationSummary[];
-  activeConversationId: string | null;
-  onNewConversation: () => void;
-  onSelectConversation: (id: string) => void;
-  onRenameConversation: (id: string, title: string) => void;
-  onDeleteConversation: (id: string) => void;
+  onOpenVaultModal: () => void;
+  onOpenCommandPalette: () => void;
+  onOpenLiveSandbox: () => void;
+  onTriggerNewScan: () => void;
 }
 
-interface WatchedFolderInfo {
-  id: string;
-  name: string;
-  path: string;
-  addedAt: string;
-  fileCount: number;
-}
+const TENDER_GEOMETRIC_STYLES = [
+  'bg-amber-500/15 text-amber-300 border-amber-400/20',
+  'bg-emerald-500/15 text-emerald-300 border-emerald-400/20',
+  'bg-sky-500/15 text-sky-300 border-sky-400/20',
+  'bg-violet-500/15 text-violet-300 border-violet-400/20',
+];
 
-/** Format a timestamp as a relative label. */
-function relativeTime(isoString: string): string {
-  try {
-    const diff = Date.now() - new Date(isoString).getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1) return 'Just now';
-    if (mins < 60) return `${mins}m ago`;
-    const hours = Math.floor(mins / 60);
-    if (hours < 24) return `${hours}h ago`;
-    const days = Math.floor(hours / 24);
-    if (days === 1) return 'Yesterday';
-    if (days < 7) return `${days}d ago`;
-    return new Date(isoString).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  } catch {
-    return '';
+function getTenderThreadSubtitle(tender: TenderMatch, idx: number): string {
+  const value = formatMillionsRand(tender.estimatedValueZar);
+  if (tender.status === 'submitted') {
+    return `Submitted • ${value}`;
   }
+  if (idx === 0 || tender.status === 'staging' || tender.status === 'pending_approval') {
+    return `Waiting on your yes • ${value}`;
+  }
+  if (idx === 1) {
+    return `SBD 1/4/6.1 staged • ${value}`;
+  }
+  return `Closes ${formatShortClosingDate(tender.closingDate)} • ${value}`;
 }
 
 export function Sidebar({
+  compliance,
+  tenders,
+  activeBidId,
   onOpenSettings,
-  activeFolderPaths,
-  onToggleFolder,
-  onFolderRemoved,
-  conversations,
-  activeConversationId,
-  onNewConversation,
-  onSelectConversation,
-  onRenameConversation,
-  onDeleteConversation,
+  onOpenVaultModal,
+  onOpenCommandPalette,
+  onOpenLiveSandbox,
+  onTriggerNewScan,
 }: SidebarProps) {
-  const [folders, setFolders] = useState<WatchedFolderInfo[]>([]);
-  const [docCount, setDocCount] = useState<number>(0);
-  const [syncStatus, setSyncStatus] = useState<'synced' | 'indexing'>('synced');
-  const [indexingProgress, setIndexingProgress] = useState<IndexingProgress | null>(null);
-  const [adding, setAdding] = useState(false);
-
-  // ── Collapsible Section State ──
-  const [isFoldersExpanded, setIsFoldersExpanded] = useState(true);
-  const [isConversationsExpanded, setIsConversationsExpanded] = useState(true);
-
-  // ── Inline rename state ──
-  const [renamingId, setRenamingId] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState('');
-  const renameInputRef = useRef<HTMLInputElement>(null);
-
-  // ── Folder data fetching ──
-  const refreshData = useCallback(async () => {
-    try {
-      const [folderList, count] = await Promise.all([
-        invoke<WatchedFolderInfo[]>('get_watched_folders'),
-        invoke<number>('get_total_file_count'),
-      ]);
-      setFolders(folderList);
-      setDocCount(count);
-    } catch (err) {
-      console.error('[Terra] Failed to refresh sidebar data:', err);
-    }
-  }, []);
-
-  useEffect(() => { refreshData(); }, [refreshData]);
+  const pathname = usePathname();
+  const [quickMenuOpen, setQuickMenuOpen] = useState(false);
+  const quickMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    let unlistenProgress: (() => void) | undefined;
-    let unlistenDone: (() => void) | undefined;
-    let unlistenFsChange: (() => void) | undefined;
-
-    const setupListeners = async () => {
-      unlistenProgress = await listen<IndexingProgress>('indexing-progress', (event) => {
-        setSyncStatus('indexing');
-        setIndexingProgress(event.payload);
-      });
-
-      unlistenDone = await listen<IndexingDone>('indexing-done', () => {
-        setSyncStatus('synced');
-        setIndexingProgress(null);
-        refreshData();
-      });
-
-      unlistenFsChange = await listen('terra://fs-change', () => {
-        refreshData();
-      });
-    };
-
-    setupListeners();
-
-    return () => {
-      if (unlistenProgress) unlistenProgress();
-      if (unlistenDone) unlistenDone();
-      if (unlistenFsChange) unlistenFsChange();
-    };
-  }, [refreshData]);
-
-  const handleAddFolder = async () => {
-    setAdding(true);
-    try {
-      const selectedPath = await invoke<string | null>('pick_folder');
-      if (selectedPath) {
-        await invoke<WatchedFolderInfo>('add_watched_folder', { path: selectedPath });
-        await refreshData();
+    if (!quickMenuOpen) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (quickMenuRef.current && !quickMenuRef.current.contains(e.target as Node)) {
+        setQuickMenuOpen(false);
       }
-    } catch (err) {
-      console.error('[Terra] Failed to add folder:', err);
-    } finally {
-      setAdding(false);
-    }
-  };
+    };
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [quickMenuOpen]);
 
-  const handleRemoveFolder = async (e: React.MouseEvent, id: string, path: string) => {
-    e.stopPropagation();
-    try {
-      await invoke('remove_watched_folder', { id });
-      onFolderRemoved(path);
-      await refreshData();
-    } catch (err) {
-      console.error('[Terra] Failed to remove folder:', err);
-    }
-  };
-
-  // ── Rename helpers ──
-  const startRename = (e: React.MouseEvent, id: string, currentTitle: string) => {
-    e.stopPropagation();
-    setRenamingId(id);
-    setRenameValue(currentTitle);
-    // Focus the input after it renders
-    setTimeout(() => renameInputRef.current?.focus(), 0);
-  };
-
-  const commitRename = () => {
-    if (renamingId && renameValue.trim()) {
-      onRenameConversation(renamingId, renameValue.trim());
-    }
-    setRenamingId(null);
-  };
-
-  const cancelRename = () => {
-    setRenamingId(null);
-  };
-
-  const handleDeleteConversation = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    onDeleteConversation(id);
-  };
-
-  const activeFilterCount = activeFolderPaths.length;
+  const attentionCount = compliance.blockingAlerts.length;
+  const vaultChips = [
+    { key: 'tax_pin', label: 'Tax' },
+    { key: 'csd', label: 'CSD' },
+    { key: 'coida', label: 'COIDA' },
+    { key: 'bbbee', label: 'B-BBEE' },
+  ] as const;
 
   return (
-    <aside className="w-[var(--sidebar-width)] h-full flex flex-col bg-surface-secondary border-r border-border-default shrink-0">
-      {/* App Header */}
-      <div className="h-12 flex items-center justify-between px-4 border-b border-border-subtle drag-region">
-        <div className="flex items-center gap-2.5 no-drag">
-          <div className="size-6 rounded-lg bg-gradient-to-br from-accent-400 to-accent-600 flex items-center justify-center">
-            <span className="text-white text-xs font-bold">T</span>
-          </div>
-          <span className="text-sm font-semibold text-text-primary tracking-tight">
-            Terra
+    <aside className="w-[240px] h-dvh flex flex-col bg-[#111113] border-r border-white/[0.06] shrink-0 select-none">
+      {/* Top Bar: Search (⌘K) + Quick Action (+) */}
+      <div className="px-3 pt-3 pb-2 flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={onOpenCommandPalette}
+          className="flex-1 h-8 px-2.5 rounded-lg bg-[#18181B]/90 hover:bg-[#1C1C1F] border border-white/[0.06] flex items-center justify-between text-xs text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
+        >
+          <span className="flex items-center gap-1.5">
+            <Search className="size-3.5 text-zinc-500" />
+            <span>Search</span>
           </span>
-        </div>
-        <div className="no-drag">
-          <IconButton tooltip="New Chat" size="sm" onClick={onNewConversation}>
-            <Plus className="size-4" />
-          </IconButton>
-        </div>
-      </div>
+          <kbd className="font-mono text-[10px] text-zinc-500">⌘K</kbd>
+        </button>
 
-      {/* Scrollable main area: Folders + Conversations */}
-      <div className="flex-1 overflow-y-auto px-2 py-3 space-y-4">
-        
-        {/* ── Synced Folders Section ── */}
-        <div>
+        <div className="relative" ref={quickMenuRef}>
           <button
             type="button"
-            onClick={() => setIsFoldersExpanded(!isFoldersExpanded)}
-            className="w-full px-2 mb-1 flex items-center justify-between cursor-pointer hover:bg-surface-tertiary/50 rounded py-1 transition-colors border-none bg-transparent"
+            onClick={() => setQuickMenuOpen((v) => !v)}
+            aria-expanded={quickMenuOpen}
+            aria-label="Quick actions"
+            className="size-8 rounded-lg bg-[#18181B]/90 hover:bg-[#1C1C1F] border border-white/[0.06] flex items-center justify-center text-zinc-400 hover:text-zinc-100 transition-colors cursor-pointer"
           >
-            <div className="flex items-center gap-1.5">
-              {isFoldersExpanded ? (
-                <ChevronDown className="size-3 text-text-tertiary" />
-              ) : (
-                <ChevronRight className="size-3 text-text-tertiary" />
-              )}
-              <span className="text-[11px] font-medium uppercase tracking-wider text-text-tertiary">
-                Synced Folders
-              </span>
-            </div>
-            {folders.length > 0 && (
-              <span className="text-[10px] text-text-tertiary flex items-center gap-1">
-                <Filter className="size-2.5" />
-                {activeFilterCount === 0
-                  ? 'All folders'
-                  : `Filtering ${activeFilterCount}`}
-              </span>
-            )}
+            <Plus className="size-3.5" />
           </button>
 
-          {isFoldersExpanded && (
-            <>
-              <nav className="space-y-0.5">
-                {folders.length === 0 && !adding ? (
-                  <div className="px-2 py-4 text-center text-xs text-text-tertiary">
-                    No folders synced yet.
-                  </div>
-                ) : (
-                  folders.map((folder) => {
-                    const isActive = activeFolderPaths.includes(folder.path);
-
-                    return (
-                      <button
-                        key={folder.id}
-                        type="button"
-                        onClick={() => onToggleFolder(folder.path)}
-                        className={`
-                          group w-full flex items-center gap-2 px-2 py-1.5 rounded-md
-                          text-sm transition-colors duration-150 cursor-pointer
-                          border-none text-left
-                          ${isActive
-                            ? 'bg-accent-600/10 text-text-primary border-l-2 border-l-accent-500 pl-1.5'
-                            : 'bg-transparent text-text-secondary hover:text-text-primary hover:bg-surface-tertiary/50'
-                          }
-                        `}
-                      >
-                        <FolderOpen
-                          className={`size-4 shrink-0 ${isActive ? 'text-accent-400' : 'text-text-tertiary'}`}
-                        />
-                        <span className="truncate flex-1" title={folder.path}>
-                          {folder.name}
-                        </span>
-                        <span
-                          className={`text-[10px] tabular-nums shrink-0 group-hover:hidden ${
-                            isActive ? 'text-accent-400/70' : 'text-text-tertiary'
-                          }`}
-                        >
-                          {folder.fileCount.toLocaleString()}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={(e) => handleRemoveFolder(e, folder.id, folder.path)}
-                          className="hidden group-hover:flex size-5 rounded items-center justify-center hover:bg-status-error/10 text-text-tertiary hover:text-status-error transition-colors cursor-pointer border-none bg-transparent shrink-0"
-                          title="Remove folder"
-                        >
-                          <Trash2 className="size-3" />
-                        </button>
-                      </button>
-                    );
-                  })
-                )}
-              </nav>
-
-              <button
-                type="button"
-                onClick={handleAddFolder}
-                disabled={adding}
-                className="mt-1 w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-text-tertiary hover:text-text-secondary hover:bg-surface-tertiary/30 transition-colors duration-150 cursor-pointer bg-transparent border-none text-left disabled:opacity-50 disabled:cursor-not-allowed"
+          <AnimatePresence>
+            {quickMenuOpen && (
+              <motion.div
+                initial={{ opacity: 0, y: -4, scale: 0.97 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -4, scale: 0.97 }}
+                transition={{ type: 'spring', stiffness: 400, damping: 34 }}
+                className="absolute left-0 top-10 z-40 w-52 rounded-xl bg-[#18181B] border border-white/10 shadow-2xl shadow-black/70 p-1.5 space-y-0.5"
               >
-                {adding ? (
-                  <Loader2 className="size-4 animate-spin shrink-0" />
-                ) : (
-                  <Plus className="size-4 shrink-0" />
-                )}
-                <span>{adding ? 'Selecting...' : 'Add Folder'}</span>
-              </button>
-            </>
-          )}
-        </div>
-
-        {/* ── Conversations Section ── */}
-        <div>
-          <button
-            type="button"
-            onClick={() => setIsConversationsExpanded(!isConversationsExpanded)}
-            className="w-full px-2 mb-1 flex items-center gap-1.5 cursor-pointer hover:bg-surface-tertiary/50 rounded py-1 transition-colors border-none bg-transparent"
-          >
-            {isConversationsExpanded ? (
-              <ChevronDown className="size-3 text-text-tertiary" />
-            ) : (
-              <ChevronRight className="size-3 text-text-tertiary" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuickMenuOpen(false);
+                    onTriggerNewScan();
+                  }}
+                  className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs text-zinc-200 hover:bg-white/[0.06] text-left border-none bg-transparent cursor-pointer"
+                >
+                  <Sparkles className="size-3.5 text-zinc-400" />
+                  <span>New tender scan</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuickMenuOpen(false);
+                    onOpenVaultModal();
+                  }}
+                  className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs text-zinc-200 hover:bg-white/[0.06] text-left border-none bg-transparent cursor-pointer"
+                >
+                  <FileUp className="size-3.5 text-zinc-400" />
+                  <span>Upload compliance doc</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuickMenuOpen(false);
+                    onOpenLiveSandbox();
+                  }}
+                  className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs text-zinc-200 hover:bg-white/[0.06] text-left border-none bg-transparent cursor-pointer"
+                >
+                  <MonitorPlay className="size-3.5 text-zinc-400" />
+                  <span>Open live sandbox</span>
+                </button>
+              </motion.div>
             )}
-            <span className="text-[11px] font-medium uppercase tracking-wider text-text-tertiary">
-              Conversations
-            </span>
-          </button>
-          
-          {isConversationsExpanded && (
-            <nav className="space-y-0.5">
-              {conversations.map((convo) => {
-                const isActive = convo.id === activeConversationId;
-                const isRenaming = convo.id === renamingId;
-
-                return (
-                  <button
-                    key={convo.id}
-                    type="button"
-                    onClick={() => onSelectConversation(convo.id)}
-                    className={`
-                      group w-full flex items-center gap-2 px-2 py-1.5 rounded-md
-                      text-sm transition-colors duration-150 cursor-pointer
-                      border-none text-left
-                      ${isActive
-                        ? 'bg-accent-600/10 text-text-primary'
-                        : 'bg-transparent text-text-secondary hover:text-text-primary hover:bg-surface-tertiary/50'
-                      }
-                    `}
-                  >
-                    <MessageSquare
-                      className={`size-3.5 shrink-0 ${isActive ? 'text-accent-400' : 'text-text-tertiary'}`}
-                    />
-
-                    {isRenaming ? (
-                      <input
-                        ref={renameInputRef}
-                        type="text"
-                        value={renameValue}
-                        onChange={(e) => setRenameValue(e.target.value)}
-                        onBlur={commitRename}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') commitRename();
-                          if (e.key === 'Escape') cancelRename();
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                        className="flex-1 min-w-0 bg-surface-tertiary/50 border border-border-default rounded px-1.5 py-0.5 text-sm text-text-primary outline-none focus:border-accent-500"
-                      />
-                    ) : (
-                      <>
-                        <span className="truncate flex-1 min-w-0" title={convo.title}>
-                          {convo.title}
-                        </span>
-                        <span className="text-[10px] text-text-tertiary shrink-0 group-hover:hidden">
-                          {relativeTime(convo.updatedAt)}
-                        </span>
-                        <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
-                          <button
-                            type="button"
-                            onClick={(e) => startRename(e, convo.id, convo.title)}
-                            className="size-5 rounded flex items-center justify-center hover:bg-surface-tertiary text-text-tertiary hover:text-text-secondary transition-colors cursor-pointer border-none bg-transparent"
-                            title="Rename"
-                          >
-                            <Pencil className="size-2.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => handleDeleteConversation(e, convo.id)}
-                            className="size-5 rounded flex items-center justify-center hover:bg-status-error/10 text-text-tertiary hover:text-status-error transition-colors cursor-pointer border-none bg-transparent"
-                            title="Delete"
-                          >
-                            <Trash2 className="size-2.5" />
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </button>
-                );
-              })}
-            </nav>
-          )}
+          </AnimatePresence>
         </div>
-
       </div>
 
-      {/* Bottom Bar: Sync Status + Settings */}
-      <div className="px-3 py-3 border-t border-border-subtle space-y-2">
-        <div className="flex items-center gap-2 px-1">
-          <StatusDot
-            status={syncStatus === 'synced' ? 'success' : 'warning'}
-            pulse={syncStatus === 'indexing'}
-          />
-          <div className="flex flex-col min-w-0 flex-1">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-medium text-text-secondary truncate">
-                {syncStatus === 'synced'
-                  ? 'Ready'
-                  : indexingProgress && indexingProgress.total > 0
-                    ? `Indexing (${indexingProgress.completed}/${indexingProgress.total})`
-                    : 'Indexing documents...'}
-              </span>
-              {indexingProgress && indexingProgress.total > 0 && (
-                <span className="text-[10px] text-text-tertiary ml-1 font-mono">
-                  {Math.round((indexingProgress.completed / indexingProgress.total) * 100)}%
-                </span>
-              )}
-            </div>
-            {indexingProgress && indexingProgress.currentFile && (
-              <span className="text-[10px] text-text-tertiary truncate" title={indexingProgress.currentFile}>
-                {indexingProgress.currentFile}
-              </span>
-            )}
-          </div>
-        </div>
+      {/* Primary Nav: Single Inbox / Vault Row */}
+      <div className="px-3 pb-3">
+        <button
+          type="button"
+          onClick={onOpenVaultModal}
+          className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-medium transition-colors cursor-pointer border ${
+            pathname === '/vault'
+              ? 'bg-[#1C1C1F] text-zinc-100 border-white/[0.08]'
+              : 'bg-transparent hover:bg-white/[0.04] text-zinc-300 border-transparent'
+          }`}
+        >
+          <span className="flex items-center gap-2">
+            <Inbox className="size-3.5 text-zinc-400" />
+            <span>Inbox / Vault</span>
+          </span>
+          {attentionCount > 0 && (
+            <span className="inline-flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full bg-white/[0.08] text-zinc-200 font-mono text-[10px] tabular-nums">
+              {attentionCount}
+            </span>
+          )}
+        </button>
+      </div>
 
-        {indexingProgress && indexingProgress.total > 0 && (
-          <div className="w-full bg-surface-tertiary rounded-full h-1.5 overflow-hidden">
-            <div
-              className="bg-accent-500 h-full transition-all duration-200 ease-out"
-              style={{
-                width: `${Math.min(100, Math.round((indexingProgress.completed / indexingProgress.total) * 100))}%`,
-              }}
+      {/* Pinned Chief of Staff Hero Card */}
+      <div className="px-3 pb-4">
+        <Link
+          href="/"
+          className="block rounded-2xl bg-[#18181B]/80 hover:bg-[#1C1C1F] border border-white/[0.06] p-3.5 text-center transition-colors no-underline"
+        >
+          <div className="relative mx-auto size-9 rounded-xl bg-gradient-to-b from-zinc-700/60 to-zinc-900 border border-white/10 flex items-center justify-center shadow-inner">
+            <span className="text-xs font-semibold tracking-tight text-zinc-100">
+              M
+            </span>
+            <span
+              className={`absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full ring-2 ring-[#18181B] ${
+                compliance.isBidReady ? 'bg-emerald-400' : 'bg-amber-400'
+              }`}
             />
           </div>
-        )}
+          <div className="mt-2 text-xs font-medium text-zinc-100">
+            Mundus Ops
+          </div>
+          <div className="text-[11px] text-zinc-500 mt-0.5">
+            Chief of Staff • 6CE PE
+          </div>
+        </Link>
+      </div>
 
-        <div className="flex items-center justify-between px-1">
-          <span className="text-[11px] text-text-tertiary">
-            {docCount.toLocaleString()} documents indexed
-          </span>
-          <IconButton tooltip="Settings" size="sm" onClick={onOpenSettings}>
-            <Settings className="size-4" />
-          </IconButton>
+      {/* Active Tender Threads ("Waiting on your yes" Pattern) */}
+      <div className="flex-1 overflow-y-auto px-2.5 space-y-0.5">
+        <div className="px-2 pb-1.5 text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+          Tender Threads
         </div>
+
+        {tenders.map((tender, idx) => {
+          const isCurrent = activeBidId === tender.id || pathname === `/bid/${tender.id}`;
+          const geometricStyle =
+            TENDER_GEOMETRIC_STYLES[idx % TENDER_GEOMETRIC_STYLES.length];
+          const subtitle = getTenderThreadSubtitle(tender, idx);
+
+          return (
+            <Link
+              key={tender.id}
+              href={`/bid/${tender.id}`}
+              className={`flex items-start gap-2.5 px-2.5 py-2 rounded-xl transition-colors no-underline ${
+                isCurrent
+                  ? 'bg-[#1C1C1F] border border-white/[0.07]'
+                  : 'hover:bg-white/[0.03] border border-transparent'
+              }`}
+            >
+              <span
+                className={`mt-0.5 size-6 rounded-lg border flex items-center justify-center shrink-0 text-[10px] font-semibold ${geometricStyle}`}
+              >
+                {idx % 2 === 0 ? '◆' : '●'}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-xs font-medium text-zinc-200 truncate">
+                  {getShortTenderLabel(tender)}
+                </div>
+                <div className="text-[11px] text-zinc-500 truncate tabular-nums mt-0.5">
+                  {subtitle}
+                </div>
+              </div>
+            </Link>
+          );
+        })}
+      </div>
+
+      {/* Bottom Footer Bar: WM Initials + Sleek Compliance Vault Pill */}
+      <div className="p-2.5 border-t border-white/[0.06] flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          title="Contractor profile & settings"
+          className="size-8 rounded-full bg-[#1C1C1F] hover:bg-zinc-800 border border-white/[0.08] flex items-center justify-center text-[11px] font-semibold text-zinc-200 shrink-0 cursor-pointer transition-colors"
+        >
+          WM
+        </button>
+
+        <button
+          type="button"
+          onClick={onOpenVaultModal}
+          className="flex-1 h-8 px-2.5 rounded-full bg-[#18181B] hover:bg-[#1C1C1F] border border-white/[0.06] flex items-center justify-between gap-1.5 cursor-pointer transition-colors min-w-0"
+        >
+          <span className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-300 truncate">
+            <ShieldCheck className="size-3 text-zinc-400 shrink-0" />
+            <span className="truncate">Vault</span>
+          </span>
+          <span className="flex items-center gap-1 shrink-0" aria-label="Tax, CSD, COIDA, B-BBEE status">
+            {vaultChips.map((chip) => {
+              const doc = compliance.docs.find((d) => d.type === chip.key);
+              const color =
+                doc?.status === 'valid'
+                  ? 'bg-emerald-400'
+                  : doc?.status === 'warning'
+                    ? 'bg-amber-400'
+                    : 'bg-rose-400';
+              return (
+                <span
+                  key={chip.key}
+                  title={`${chip.label}: ${doc?.status ?? 'missing'}`}
+                  className={`size-1.5 rounded-full ${color}`}
+                />
+              );
+            })}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          aria-label="Open settings"
+          className="size-8 rounded-full bg-transparent hover:bg-white/[0.05] border-none flex items-center justify-center text-zinc-500 hover:text-zinc-200 shrink-0 cursor-pointer transition-colors"
+        >
+          <Settings className="size-3.5" />
+        </button>
       </div>
     </aside>
   );
