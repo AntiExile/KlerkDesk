@@ -1,75 +1,87 @@
-import { useState, useRef, useEffect, useCallback, type KeyboardEvent } from 'react';
+'use client';
+
+import { useState, useRef, useEffect, useCallback, type KeyboardEvent, type ReactNode } from 'react';
+import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Search,
-  FileText,
-  Mail,
-  BarChart3,
+  ShieldCheck,
+  FileUp,
+  MonitorPlay,
+  Settings,
   Scale,
-  Shield,
   Sparkles,
 } from 'lucide-react';
 
 interface CommandPaletteProps {
   isOpen: boolean;
   onClose: () => void;
+  onOpenComplianceUploader?: () => void;
+  onOpenSettings?: () => void;
+  onAskPrompt?: (prompt: string) => void;
+  onOpenLiveSandbox?: () => void;
 }
 
 interface QuickAction {
   id: string;
   title: string;
   description: string;
-  icon: React.ReactNode;
+  icon: ReactNode;
   shortcut?: string;
 }
 
 const QUICK_ACTIONS: QuickAction[] = [
   {
-    id: 'summarize',
-    title: 'Summarize open document',
-    description: 'Generate a concise summary of the active file',
-    icon: <FileText className="size-4" />,
+    id: 'upload-compliance',
+    title: 'Open Compliance Vault',
+    description: 'Review or upload CSD (7d), CIPC/ID (90d), Tax PIN, COIDA & B-BBEE',
+    icon: <ShieldCheck className="size-4" />,
+    shortcut: 'A',
   },
   {
-    id: 'draft-email',
-    title: 'Draft email response',
-    description: 'Compose a professional reply based on context',
-    icon: <Mail className="size-4" />,
+    id: 'open-bid',
+    title: 'Inspect George — York St Upgrade',
+    description: 'Open R 14 850 000 staged bid, BoQ pricing & Approval Shield',
+    icon: <FileUp className="size-4" />,
+    shortcut: 'B',
   },
   {
-    id: 'search-kb',
-    title: 'Search local knowledge base',
-    description: 'Find relevant documents across your synced folders',
-    icon: <Search className="size-4" />,
-    shortcut: '⌘F',
+    id: 'live-sandbox',
+    title: 'Toggle boat.dev Live Browser',
+    description: 'Slide open the 10-minute Ubuntu desktop iframe & Stagehand trace',
+    icon: <MonitorPlay className="size-4" />,
   },
   {
-    id: 'analyze',
-    title: 'Analyze financial data',
-    description: 'Extract insights from invoices and financial statements',
-    icon: <BarChart3 className="size-4" />,
-  },
-  {
-    id: 'extract',
-    title: 'Extract contract clauses',
-    description: 'Identify and categorize key contractual terms',
+    id: 'audit-sbd',
+    title: 'Run Full PDF Audit (Claude Sonnet 5.5)',
+    description: 'Check mandatory SBD 1/4/6.1 returnables and Compliance Vault blocks',
     icon: <Scale className="size-4" />,
+    shortcut: 'C',
   },
   {
-    id: 'compliance',
-    title: 'Generate compliance report',
-    description: 'Create a regulatory compliance check summary',
-    icon: <Shield className="size-4" />,
-  },
-  {
-    id: 'ask',
-    title: 'Ask Terra',
-    description: 'Open a free-form query with the local AI engine',
+    id: 'ask-compliance',
+    title: 'Ask Mundus Ops About Today’s Scan',
+    description: 'Query DeepSeek v4 Flash on municipal deadlines and compliance flags',
     icon: <Sparkles className="size-4" />,
+  },
+  {
+    id: 'settings',
+    title: 'Contractor & Region Settings',
+    description: 'Configure CIDB grade, municipal regions, WhatsApp & $15/mo OpenRouter cap',
+    icon: <Settings className="size-4" />,
+    shortcut: '⌘,',
   },
 ];
 
-export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
+export function CommandPalette({
+  isOpen,
+  onClose,
+  onOpenComplianceUploader,
+  onOpenSettings,
+  onAskPrompt,
+  onOpenLiveSandbox,
+}: CommandPaletteProps) {
+  const router = useRouter();
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -80,17 +92,14 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
       action.description.toLowerCase().includes(query.toLowerCase())
   );
 
-  // Reset state on open
   useEffect(() => {
     if (isOpen) {
       setQuery('');
       setSelectedIndex(0);
-      // Small delay for focus after animation starts
-      setTimeout(() => inputRef.current?.focus(), 50);
+      setTimeout(() => inputRef.current?.focus(), 40);
     }
   }, [isOpen]);
 
-  // Keep selected index in bounds
   useEffect(() => {
     if (selectedIndex >= filtered.length) {
       setSelectedIndex(Math.max(0, filtered.length - 1));
@@ -99,10 +108,40 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
 
   const handleSelect = useCallback(
     (action: QuickAction) => {
-      console.log(`[Terra] Action selected: ${action.title}`);
+      switch (action.id) {
+        case 'open-bid':
+          router.push('/bid/ET-2026-WC-0842');
+          break;
+        case 'upload-compliance':
+          onOpenComplianceUploader?.();
+          break;
+        case 'live-sandbox':
+          onOpenLiveSandbox?.();
+          break;
+        case 'settings':
+          onOpenSettings?.();
+          break;
+        case 'audit-sbd':
+          onAskPrompt?.(
+            'Run a full tender PDF audit on ET-2026-WC-0842 and verify SBD 1, SBD 4, SBD 6.1 compliance.'
+          );
+          break;
+        case 'ask-compliance':
+          onAskPrompt?.(
+            'Summarize the blocking compliance docs and closing dates from today’s scan.'
+          );
+          break;
+      }
       onClose();
     },
-    [onClose]
+    [
+      onAskPrompt,
+      onClose,
+      onOpenComplianceUploader,
+      onOpenLiveSandbox,
+      onOpenSettings,
+      router,
+    ]
   );
 
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -132,28 +171,25 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
     <AnimatePresence>
       {isOpen && (
         <>
-          {/* Backdrop */}
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm"
+            className="fixed inset-0 z-50 bg-black/65 backdrop-blur-sm"
             onClick={onClose}
           />
 
-          {/* Modal */}
           <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: -10 }}
+            initial={{ opacity: 0, scale: 0.96, y: -8 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: -10 }}
-            transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
-            className="fixed z-50 top-[20%] left-1/2 -translate-x-1/2 w-full max-w-[580px] mx-4"
+            exit={{ opacity: 0, scale: 0.96, y: -8 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 34 }}
+            className="fixed z-50 top-[18%] left-1/2 -translate-x-1/2 w-full max-w-[560px] px-4"
           >
-            <div className="bg-surface-secondary border border-border-default rounded-xl shadow-2xl shadow-black/40 overflow-hidden">
-              {/* Search Input */}
-              <div className="flex items-center gap-3 px-4 border-b border-border-subtle">
-                <Search className="size-4 text-text-tertiary shrink-0" />
+            <div className="bg-[#141416] border border-white/10 rounded-2xl shadow-2xl shadow-black/70 overflow-hidden">
+              <div className="flex items-center gap-3 px-4 border-b border-white/[0.06]">
+                <Search className="size-4 text-zinc-500 shrink-0" />
                 <input
                   ref={inputRef}
                   type="text"
@@ -163,79 +199,56 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
                     setSelectedIndex(0);
                   }}
                   onKeyDown={handleKeyDown}
-                  placeholder="Search actions..."
-                  className="flex-1 bg-transparent border-none outline-none text-sm text-text-primary placeholder:text-text-tertiary py-3.5 h-12"
+                  placeholder="Jump to Compliance Vault, George bid, or sandbox..."
+                  className="flex-1 bg-transparent border-none outline-none text-sm text-zinc-100 placeholder:text-zinc-500 py-3.5 h-12"
                 />
-                <kbd className="hidden sm:inline-flex text-[10px] font-mono text-text-tertiary bg-surface-tertiary/60 px-1.5 py-0.5 rounded border border-border-subtle">
+                <kbd className="hidden sm:inline-flex text-[10px] font-mono text-zinc-500 bg-white/[0.04] px-1.5 py-0.5 rounded border border-white/[0.08]">
                   ESC
                 </kbd>
               </div>
 
-              {/* Actions List */}
               <div className="max-h-[320px] overflow-y-auto p-1.5">
                 {filtered.length === 0 ? (
-                  <div className="px-3 py-8 text-center text-sm text-text-tertiary">
-                    No matching actions found
+                  <div className="px-3 py-8 text-center text-sm text-zinc-500">
+                    No matching actions
                   </div>
                 ) : (
                   filtered.map((action, index) => (
                     <button
+                      type="button"
                       key={action.id}
                       onClick={() => handleSelect(action)}
                       onMouseEnter={() => setSelectedIndex(index)}
                       className={`
-                        w-full flex items-center gap-3 px-3 py-2.5 rounded-lg
+                        w-full flex items-center gap-3 px-3 py-2.5 rounded-xl
                         text-left transition-colors duration-100
                         cursor-pointer border-none
-                        ${index === selectedIndex
-                          ? 'bg-accent-600/15 text-text-primary'
-                          : 'bg-transparent text-text-secondary hover:bg-surface-tertiary/50'
+                        ${
+                          index === selectedIndex
+                            ? 'bg-white/[0.08] text-zinc-100'
+                            : 'bg-transparent text-zinc-300 hover:bg-white/[0.04]'
                         }
                       `}
                     >
-                      <div
-                        className={`
-                          size-8 rounded-lg flex items-center justify-center shrink-0
-                          ${index === selectedIndex
-                            ? 'bg-accent-600/20 text-accent-400'
-                            : 'bg-surface-tertiary/50 text-text-tertiary'
-                          }
-                        `}
-                      >
+                      <div className="size-8 rounded-lg bg-[#1C1C1F] border border-white/[0.06] flex items-center justify-center shrink-0 text-zinc-300">
                         {action.icon}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium truncate">
+                        <div className="text-xs font-medium truncate">
                           {action.title}
                         </div>
-                        <div className="text-xs text-text-tertiary truncate">
+                        <div className="text-[11px] text-zinc-500 truncate">
                           {action.description}
                         </div>
                       </div>
                       {action.shortcut && (
-                        <kbd className="text-[10px] font-mono text-text-tertiary bg-surface-tertiary/60 px-1.5 py-0.5 rounded border border-border-subtle shrink-0">
+                        <kbd className="text-[10px] font-mono text-zinc-400 bg-white/[0.05] px-1.5 py-0.5 rounded border border-white/[0.08] shrink-0">
                           {action.shortcut}
                         </kbd>
                       )}
                     </button>
                   ))
                 )}
-              </div>
-
-              {/* Footer hint */}
-              <div className="px-4 py-2 border-t border-border-subtle flex items-center gap-4 text-[10px] text-text-tertiary">
-                <span className="flex items-center gap-1">
-                  <kbd className="font-mono bg-surface-tertiary/60 px-1 rounded border border-border-subtle">↑↓</kbd>
-                  navigate
-                </span>
-                <span className="flex items-center gap-1">
-                  <kbd className="font-mono bg-surface-tertiary/60 px-1 rounded border border-border-subtle">↵</kbd>
-                  select
-                </span>
-                <span className="flex items-center gap-1">
-                  <kbd className="font-mono bg-surface-tertiary/60 px-1 rounded border border-border-subtle">esc</kbd>
-                  close
-                </span>
               </div>
             </div>
           </motion.div>

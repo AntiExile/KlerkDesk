@@ -1,378 +1,149 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { Upload, Cpu, Zap, RotateCw, Play, Terminal, Copy, Check, DownloadCloud, AlertTriangle, CheckCircle2 } from 'lucide-react';
-import { Toggle } from '@/components/ui/Toggle';
+'use client';
+
+import { useState, useEffect } from 'react';
+import { Cpu, Zap, RotateCw, UploadCloud, ShieldCheck } from 'lucide-react';
 import { StatusDot } from '@/components/ui/StatusDot';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-import { load, Store } from '@tauri-apps/plugin-store';
-import type { ModelStatusInfo } from '@/types';
+import {
+  getContractorSettingsAction,
+  testSandboxConnectionAction,
+} from '@/app/actions/settings';
+import type { ContractorSettings } from '@/types';
 
 interface AIEngineTabProps {
   onOpenModelSetup?: () => void;
 }
 
 export function AIEngineTab({ onOpenModelSetup }: AIEngineTabProps) {
-  const [store, setStore] = useState<Store | null>(null);
-  
-  const [useDefault, setUseDefault] = useState(true);
-  const [selectedModel, setSelectedModel] = useState<string | null>(null);
-  const [modelStatus, setModelStatus] = useState<ModelStatusInfo | null>(null);
-  
-  const [engineConnected, setEngineConnected] = useState(false);
+  const [settings, setSettings] = useState<ContractorSettings | null>(null);
+  const [health, setHealth] = useState<{
+    boatSdkReady: boolean;
+    stagehandReady: boolean;
+    playwrightReady: boolean;
+    headlessEnv: string;
+    region: string;
+    latencyMs: number;
+  } | null>(null);
   const [isTesting, setIsTesting] = useState(false);
-  const [isRestarting, setIsRestarting] = useState(false);
-  const [logLines, setLogLines] = useState<string[]>([]);
-  const [showLogs, setShowLogs] = useState(true);
-  const [copied, setCopied] = useState(false);
-  const logEndRef = useRef<HTMLDivElement>(null);
 
-  const refreshModelStatus = useCallback(async () => {
-    try {
-      const status = await invoke<ModelStatusInfo>('check_model_status');
-      setModelStatus(status);
-    } catch (e) {
-      console.error('[Terra] Failed to check model status:', e);
-    }
-  }, []);
-
-  useEffect(() => {
-    async function initStore() {
-      const s = await load('settings.json', { autoSave: false });
-      setStore(s);
-      
-      const savedUseDefault = await s.get('useDefault');
-      if (savedUseDefault !== null) setUseDefault(savedUseDefault as boolean);
-      
-      const savedModel = await s.get('selectedModel');
-      if (savedModel !== null) setSelectedModel(savedModel as string);
-    }
-    initStore();
-    refreshModelStatus();
-    
-    // Initial connection test
-    handleTestConnection();
-  }, [refreshModelStatus]);
-
-  // Listen for sidecar output
-  useEffect(() => {
-    let unlisten: () => void;
-    const setup = async () => {
-      unlisten = await listen<{ line: string }>('engine-log', (event) => {
-        setLogLines((prev) => {
-          const next = [...prev, event.payload.line];
-          return next.length > 200 ? next.slice(-200) : next;
-        });
-      });
-    };
-    setup();
-    return () => { if (unlisten) unlisten(); };
-  }, []);
-
-  // Auto-scroll log to bottom
-  useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [logLines]);
-
-  const handleUseDefaultChange = async (val: boolean) => {
-    setUseDefault(val);
-    if (store) {
-      await store.set('useDefault', val);
-      await store.save();
-    }
-  };
-
-  const handleSelectModel = async () => {
-    try {
-      const selected = await invoke<string | null>('pick_model_folder');
-      if (selected) {
-        setSelectedModel(selected);
-        if (store) {
-          await store.set('selectedModel', selected);
-          await store.save();
-        }
-      }
-    } catch (e) {
-      console.error('[Terra] Failed to pick folder:', e);
-    }
-  };
-
-  const handleTestConnection = async () => {
+  const runTest = async () => {
     setIsTesting(true);
     try {
-      const success = await invoke<boolean>('test_connection');
-      setEngineConnected(success);
-    } catch (e) {
-      console.error('[Terra] Connection test failed:', e);
-      setEngineConnected(false);
+      const res = await testSandboxConnectionAction();
+      setHealth(res);
     } finally {
       setIsTesting(false);
     }
   };
 
-  const handleRestart = async () => {
-    setIsRestarting(true);
-    setEngineConnected(false);
-    try {
-      await invoke('restart_engine', {
-        useDefault,
-        modelPath: selectedModel,
-      });
-      
-      // Poll for connection every 3s for up to 90s (model loading is slow)
-      const MAX_ATTEMPTS = 30;
-      const INTERVAL_MS = 3000;
-      
-      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-        await new Promise((r) => setTimeout(r, INTERVAL_MS));
-        try {
-          const success = await invoke<boolean>('test_connection');
-          if (success) {
-            setEngineConnected(true);
-            setIsRestarting(false);
-            return;
-          }
-        } catch {
-          // Server not ready yet, keep trying
-        }
-      }
-      
-      // Gave up after 90s
-      console.error('[Terra] Engine did not start after 90s');
-      setEngineConnected(false);
-    } catch (e) {
-      console.error('[Terra] Failed to restart engine:', e);
-    } finally {
-      setIsRestarting(false);
-    }
-  };
+  useEffect(() => {
+    getContractorSettingsAction().then(setSettings);
+    runTest();
+  }, []);
+
+  const usedUsd = settings?.openRouterUsedUsd ?? 4.18;
+  const capUsd = settings?.openRouterSubKeyCapUsd ?? 15;
+  const pct = Math.min(100, Math.round((usedUsd / capUsd) * 100));
 
   return (
     <div className="space-y-6">
-      {/* Model Configuration */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-sm font-semibold text-text-primary">
-              Model Configuration
-            </h3>
-            <p className="text-xs text-text-tertiary mt-1">
-              Choose between the default bundled model or load a custom local
-              model.
-            </p>
+      <div>
+        <h3 className="text-sm font-semibold text-text-primary">
+          OpenRouter Per-Client Routing ($15/mo Sub-Key Cap)
+        </h3>
+        <p className="text-xs text-text-tertiary mt-1">
+          DOM &amp; Q&amp;A tasks route to <code className="font-mono text-accent-300">deepseek/deepseek-v4-flash</code>; full tender PDF audits route to <code className="font-mono text-accent-300">anthropic/claude-sonnet-5.5</code>.
+        </p>
+      </div>
+
+      <div className="p-4 rounded-xl bg-[#09090B]/70 border border-white/10 space-y-3">
+        <div className="flex items-center justify-between text-xs">
+          <span className="font-medium text-text-primary">
+            Monthly Sub-Key Usage
+          </span>
+          <span className="font-mono text-accent-300 tabular-nums font-semibold">
+            ${usedUsd.toFixed(2)} / ${capUsd.toFixed(2)} ({pct}%)
+          </span>
+        </div>
+        <div className="h-2 w-full bg-zinc-800 rounded-full overflow-hidden">
+          <div
+            className="h-full bg-gradient-to-r from-accent-500 to-accent-300 rounded-full transition-all"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+          <div className="p-3 rounded-lg bg-[#121215] border border-white/10">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-text-primary">
+              <Zap className="size-3.5 text-accent-400" />
+              DOM / Chat / WhatsApp
+            </div>
+            <div className="font-mono text-[11px] text-accent-300 mt-1">
+              deepseek/deepseek-v4-flash
+            </div>
+          </div>
+          <div className="p-3 rounded-lg bg-[#121215] border border-white/10">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-text-primary">
+              <Cpu className="size-3.5 text-accent-400" />
+              Full Tender PDF &amp; SBD Audit
+            </div>
+            <div className="font-mono text-[11px] text-accent-300 mt-1">
+              anthropic/claude-sonnet-5.5
+            </div>
           </div>
         </div>
+      </div>
 
-        {/* Model Status Card */}
-        <div className="p-3.5 rounded-lg bg-surface-primary/50 border border-border-subtle flex items-center justify-between">
+      <div className="space-y-3">
+        <h4 className="text-sm font-medium text-text-primary">
+          boat.dev Ubuntu VM &amp; Stagehand Browser Sandbox
+        </h4>
+        <div className="flex items-center justify-between p-3.5 rounded-xl bg-[#09090B]/70 border border-white/10 gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            <div className={`size-8 rounded-lg flex items-center justify-center shrink-0 ${
-              modelStatus?.hasModel ? 'bg-status-success/10 text-status-success' : 'bg-status-warning/10 text-status-warning'
-            }`}>
-              {modelStatus?.hasModel ? <CheckCircle2 className="size-4" /> : <AlertTriangle className="size-4" />}
-            </div>
+            <StatusDot
+              status={health?.stagehandReady && health?.boatSdkReady ? 'success' : 'warning'}
+              pulse={Boolean(health?.stagehandReady)}
+              size="md"
+            />
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-text-primary">
-                  {modelStatus?.hasModel ? (modelStatus.modelName || 'Local Model Ready') : 'No Model Installed'}
-                </span>
-                <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
-                  modelStatus?.hasModel
-                    ? 'bg-status-success/10 text-status-success border border-status-success/20'
-                    : 'bg-status-warning/10 text-status-warning border border-status-warning/20'
-                }`}>
-                  {modelStatus?.hasModel ? (modelStatus.isDefault ? 'Default Model' : 'Custom Model') : 'Action Required'}
-                </span>
+              <div className="text-xs font-semibold text-text-primary">
+                {health
+                  ? `Stagehand + boat.dev (${health.region}) · ${health.latencyMs}ms`
+                  : 'Checking sandbox...'}
               </div>
-              <div className="text-[11px] text-text-tertiary truncate font-mono mt-0.5" title={modelStatus?.modelPath || ''}>
-                {modelStatus?.modelPath ? modelStatus.modelPath : 'No model weights found on this computer.'}
+              <div className="text-[11px] text-text-tertiary font-mono truncate">
+                HEADLESS={health?.headlessEnv ?? 'false'} · Playwright:{' '}
+                {health?.playwrightReady ? 'ready' : 'pending'} · 10m live VM TTL
               </div>
             </div>
           </div>
 
+          <button
+            type="button"
+            onClick={runTest}
+            disabled={isTesting}
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-text-primary transition-colors cursor-pointer border border-white/10 shrink-0"
+          >
+            <RotateCw className={`size-3 ${isTesting ? 'animate-spin' : ''}`} />
+            Test Sandbox
+          </button>
+        </div>
+      </div>
+
+      {onOpenModelSetup && (
+        <div className="p-3.5 rounded-xl bg-[#09090B]/70 border border-white/10 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 text-xs text-text-secondary">
+            <ShieldCheck className="size-4 text-accent-400 shrink-0" />
+            <span>Need to refresh expired CSD (7d) or CIPC/ID (90d) docs?</span>
+          </div>
           <button
             type="button"
             onClick={onOpenModelSetup}
-            className="ml-3 px-3 py-1.5 rounded-lg bg-surface-tertiary hover:bg-surface-tertiary/80 text-text-primary text-xs font-medium border border-border-default transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
+            className="px-3 py-1.5 rounded-lg bg-accent-600 hover:bg-accent-500 text-white text-xs font-medium flex items-center gap-1.5 cursor-pointer border-none shrink-0"
           >
-            <DownloadCloud className="size-3.5 text-accent-400" />
-            <span>Setup / Download</span>
-          </button>
-        </div>
-
-        <div className="p-3 rounded-lg bg-surface-primary/50 border border-border-subtle">
-          <Toggle
-            enabled={useDefault}
-            onChange={handleUseDefaultChange}
-            label="Use Default Model"
-            description="Colibrì GLM-5.2 Engine"
-          />
-
-          {useDefault && (
-            <div className="mt-3 ml-14 space-y-1.5">
-              <div className="flex items-center gap-2">
-                <Zap className="size-3 text-accent-400" />
-                <span className="text-xs text-text-secondary">
-                  Optimized for legal & financial document analysis
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Cpu className="size-3 text-accent-400" />
-                <span className="text-xs text-text-secondary">
-                  Direct-from-NVMe Streaming · Apple Silicon optimized
-                </span>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Custom Model Section */}
-      {!useDefault && (
-        <div className="space-y-4">
-          <div>
-            <h4 className="text-sm font-medium text-text-primary mb-1">
-              Advanced: Custom Local Model
-            </h4>
-            <p className="text-xs text-text-tertiary">
-              Select a pre-converted Colibrì GLM-5.2 model directory.
-            </p>
-          </div>
-
-          {/* File Picker */}
-          <button
-            type="button"
-            onClick={handleSelectModel}
-            className={`
-              w-full flex flex-col items-center justify-center gap-2
-              py-6 rounded-lg border-2 border-dashed
-              transition-colors duration-150 cursor-pointer bg-transparent
-              ${selectedModel
-                ? 'border-accent-600/30 bg-accent-600/5'
-                : 'border-border-default hover:border-accent-600/40 hover:bg-accent-600/5'
-              }
-            `}
-          >
-            <Upload className={`size-5 ${selectedModel ? 'text-accent-400' : 'text-text-tertiary'}`} />
-            {selectedModel ? (
-              <div className="text-center">
-                <div className="text-sm font-medium text-text-primary">
-                  Model loaded
-                </div>
-                <div className="text-xs text-text-tertiary mt-0.5 font-mono break-all px-4">
-                  {selectedModel}
-                </div>
-              </div>
-            ) : (
-              <div className="text-center">
-                <div className="text-sm text-text-secondary">
-                  Select Colibrì Model Directory
-                </div>
-                <div className="text-xs text-text-tertiary mt-0.5">
-                  Click to browse your local filesystem
-                </div>
-              </div>
-            )}
+            <UploadCloud className="size-3.5" />
+            Open Compliance Uploader
           </button>
         </div>
       )}
-
-      {/* Engine Status */}
-      <div className="space-y-3">
-        <h4 className="text-sm font-medium text-text-primary">
-          Engine Status
-        </h4>
-        <div className="flex items-center justify-between p-3 rounded-lg bg-surface-primary/50 border border-border-subtle">
-          <div className="flex items-center gap-2.5">
-            <StatusDot
-              status={engineConnected ? 'success' : isRestarting ? 'warning' : 'error'}
-              pulse={engineConnected || isRestarting}
-              size="md"
-            />
-            <div>
-              <div className="text-sm text-text-primary">
-                {engineConnected
-                  ? 'Connected to localhost:14205'
-                  : isRestarting
-                  ? 'Starting engine...'
-                  : 'Engine not running'}
-              </div>
-              <div className="text-xs text-text-tertiary">
-                {engineConnected
-                  ? 'Terra Inference Engine · Ready'
-                  : isRestarting
-                  ? 'Loading model weights — this may take a minute'
-                  : 'Start the local inference engine to begin'}
-              </div>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleTestConnection}
-              disabled={isTesting || isRestarting}
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-surface-tertiary/50 text-text-secondary hover:text-text-primary hover:bg-surface-tertiary transition-colors cursor-pointer border border-border-subtle disabled:opacity-50"
-            >
-              <RotateCw className={`size-3 ${isTesting ? 'animate-spin' : ''}`} />
-              Test
-            </button>
-            <button
-              type="button"
-              onClick={handleRestart}
-              disabled={isRestarting}
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-accent-600 text-white hover:bg-accent-700 transition-colors cursor-pointer border border-accent-700 disabled:opacity-50"
-            >
-              <Play className={`size-3 ${isRestarting ? 'animate-pulse' : ''}`} />
-              {isRestarting ? 'Starting...' : 'Apply & Restart'}
-            </button>
-          </div>
-        </div>
-
-        {/* Engine Log Console */}
-        <div className="flex items-center justify-between mt-2">
-          <button
-            type="button"
-            onClick={() => setShowLogs((v) => !v)}
-            className="flex items-center gap-1.5 text-xs text-text-tertiary hover:text-text-secondary transition-colors cursor-pointer bg-transparent border-none p-0"
-          >
-            <Terminal className="size-3" />
-            {showLogs ? 'Hide' : 'Show'} engine output
-            {logLines.length > 0 && (
-              <span className="text-[10px] text-text-tertiary/60">({logLines.length} lines)</span>
-            )}
-          </button>
-          {showLogs && logLines.length > 0 && (
-            <button
-              type="button"
-              onClick={() => {
-                navigator.clipboard.writeText(logLines.join('\n'));
-                setCopied(true);
-                setTimeout(() => setCopied(false), 2000);
-              }}
-              className="flex items-center gap-1 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors cursor-pointer bg-transparent border-none p-0"
-            >
-              {copied ? <Check className="size-3 text-green-400" /> : <Copy className="size-3" />}
-              {copied ? 'Copied' : 'Copy'}
-            </button>
-          )}
-        </div>
-
-        {showLogs && (
-          <div className="mt-2 rounded-lg bg-[#0d1117] border border-border-subtle overflow-hidden">
-            <div className="max-h-40 overflow-y-auto p-3 font-mono text-[11px] leading-relaxed text-[#8b949e] scrollbar-thin">
-              {logLines.length === 0 ? (
-                <span className="text-text-tertiary/40 italic">No engine output yet...</span>
-              ) : (
-                logLines.map((line, i) => (
-                  <div key={i} className={line.includes('error') || line.includes('Error') || line.includes('exited') ? 'text-red-400' : line.includes('ready') || line.includes('Running') || line.includes('Serving') ? 'text-green-400' : ''}>
-                    {line}
-                  </div>
-                ))
-              )}
-              <div ref={logEndRef} />
-            </div>
-          </div>
-        )}
-      </div>
     </div>
   );
 }
