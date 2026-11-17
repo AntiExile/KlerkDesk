@@ -8,6 +8,7 @@ export interface ContextCitation {
   sourceTitle?: string;
   filePath: string;
   textSnippet: string;
+  pageNumber?: number;
   fileType?: 'pdf' | 'csv' | 'txt' | 'md' | 'json' | 'docx' | 'xlsx' | string;
   characterCount?: number;
   score?: number;
@@ -100,8 +101,8 @@ export function ContextCard({
           <Layers className="size-3 text-accent-400" />
           Referenced Context
         </span>
-        <span className="inline-flex h-4 items-center rounded-md bg-zinc-800/80 px-1.5 text-[10px] font-mono text-zinc-400 tabular-nums border border-white/10">
-          {citations.length} {citations.length === 1 ? 'source' : 'sources'}
+        <span className="text-[11px] font-mono text-zinc-500 tabular-nums">
+          · {citations.length} {citations.length === 1 ? 'source' : 'sources'}
         </span>
       </div>
 
@@ -129,6 +130,7 @@ export function ContextCard({
                   {title}
                 </span>
                 <span className="ml-auto shrink-0 font-mono text-[10px] text-zinc-500 tabular-nums">
+                  {citation.pageNumber ? `p. ${citation.pageNumber} · ` : ''}
                   {charCount} chars
                 </span>
               </div>
@@ -142,6 +144,7 @@ export function ContextCard({
                   className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] border text-[8.5px] font-bold uppercase tracking-wider ${meta.bg}`}
                 >
                   {meta.label}
+                  {citation.pageNumber ? ` · P.${citation.pageNumber}` : ''}
                 </span>
                 <span className="flex items-center gap-0.5 text-[10.5px] text-zinc-500 group-hover:text-accent-400 transition-colors font-medium">
                   Inspect
@@ -166,6 +169,9 @@ export function ContextCard({
               <span className="truncate font-semibold text-sm text-zinc-100">
                 {selectedCitation.sourceTitle ||
                   selectedCitation.filePath.split('/').pop()}
+                {selectedCitation.pageNumber
+                  ? ` (Page ${selectedCitation.pageNumber})`
+                  : ''}
               </span>
               <button
                 type="button"

@@ -13,10 +13,11 @@ import {
   useMutation as useConvexMutation,
   useQuery as useConvexQuery,
 } from 'convex/react';
+import { makeFunctionReference } from 'convex/server';
 import { api } from '@/convex/_generated/api';
 import {
   getComplianceVaultAction,
-  refreshCsdReportAction,
+  runPortalScanAction,
   uploadComplianceDocAction,
 } from '@/app/actions/compliance';
 import {
@@ -26,6 +27,13 @@ import {
   stampSbdFormsAction,
   triggerApprovalShieldAction,
 } from '@/app/actions/bid';
+import {
+  createEmptyComplianceDocs,
+  DEMO_USERNAME,
+  evaluateComplianceSummary,
+  isLegacySeededComplianceDoc,
+} from '@/lib/compliance';
+import type { TenderScanPreferences } from '@/lib/etenders-live';
 import type { StampedSbdResult } from '@/lib/pdf-stamp';
 import type {
   ApprovalActionType,
@@ -34,7 +42,9 @@ import type {
   ComplianceDoc,
   ComplianceDocType,
   ComplianceSummary,
+  SubmissionChannel,
   TenderMatch,
+  UsageSummary,
 } from '@/types';
 
 interface ReactiveWorkspaceSnapshot {
@@ -43,6 +53,7 @@ interface ReactiveWorkspaceSnapshot {
   boqsByTender: Record<string, BoQItem[]>;
   approvalsByTender: Record<string, ApprovalShieldState[]>;
   stagedPdfsByTender: Record<string, StampedSbdResult>;
+  usageSummary: UsageSummary | null;
 }
 
 const listeners = new Set<() => void>();
@@ -53,6 +64,7 @@ let clientSnapshot: ReactiveWorkspaceSnapshot = {
   boqsByTender: {},
   approvalsByTender: {},
   stagedPdfsByTender: {},
+  usageSummary: null,
 };
 
 function emitChange() {
@@ -68,6 +80,18 @@ function setClientSnapshot(
   emitChange();
 }
 
+export function resetClientWorkspaceSnapshot() {
+  clientSnapshot = {
+    compliance: evaluateComplianceSummary(createEmptyComplianceDocs()),
+    tenders: [],
+    boqsByTender: {},
+    approvalsByTender: {},
+    stagedPdfsByTender: {},
+    usageSummary: null,
+  };
+  emitChange();
+}
+
 function subscribeSnapshot(listener: () => void) {
   listeners.add(listener);
   return () => {
@@ -80,16 +104,7 @@ function getClientSnapshot() {
 }
 
 interface LiveConvexMutators {
-  upsertDoc: (args: {
-    docType: ComplianceDocType;
-    referenceNumber: string;
-    issuedAt: string;
-    expiresAt: string | null;
-    fileName: string;
-    fileSizeBytes: number;
-    storageId?: string;
-  }) => Promise<unknown>;
-  refreshCsd: () => Promise<unknown>;
+  generateComplianceUploadUrl: () => Promise<string>;
   saveBoq: (args: {
     tenderId: string;
     items: Array<{
@@ -125,35 +140,56 @@ interface LiveConvexMutators {
     requestedBy: string;
     boatSessionId?: string | null;
   }) => Promise<unknown>;
-  resolveApproval: (args: {
-    approvalId: string;
-    decision: 'approved' | 'rejected';
-    operatorName?: string;
-  }) => Promise<unknown>;
 }
 
 let liveConvexMutators: LiveConvexMutators | null = null;
 
 /**
  * Unconditionally mounts Convex `useQuery` and `useMutation` hooks when
- * `NEXT_PUBLIC_CONVEX_URL` is configured, syncing live Convex database
- * updates into the shared reactive workspace store.
+ * `NEXT_PUBLIC_CONVEX_URL` is configured, syncing authenticated Convex data
+ * into the shared reactive workspace store.
  */
 function ConvexLiveBridge() {
   const { isAuthenticated } = useConvexAuth();
-  const liveState = useConvexQuery(api.tenderOps.getWorkspaceState, {});
+  const currentUser = useConvexQuery(
+    api.users.currentUser,
+    isAuthenticated ? {} : 'skip'
+  );
+  const liveState = useConvexQuery(
+    api.tenderOps.getWorkspaceState,
+    isAuthenticated ? {} : 'skip'
+  );
+  const legacyGenerateUploadUrlRef = useMemo(
+    () => makeFunctionReference<'mutation'>('tenderOps:generateUploadUrl'),
+    []
+  );
   const ensureDemoSeed = useConvexMutation(api.users.ensureDemoSeed);
-  const upsertDoc = useConvexMutation(api.tenderOps.upsertComplianceDoc);
-  const refreshCsd = useConvexMutation(api.tenderOps.refreshCsdReport);
-  const saveBoq = useConvexMutation(api.tenderOps.saveBoqItems);
-  const saveStamp = useConvexMutation(api.tenderOps.saveStampedSbdPackage);
-  const triggerApproval = useConvexMutation(api.tenderOps.triggerApprovalShield);
-  const resolveApproval = useConvexMutation(api.tenderOps.resolveApprovalShield);
+  const generateComplianceUploadUrl = useConvexMutation(
+    api.compliance.generateComplianceUploadUrl
+  );
+  const legacyGenerateUploadUrl = useConvexMutation(legacyGenerateUploadUrlRef);
+  const saveBoq = useConvexMutation(api.bid.saveBoqItems);
+  const saveStamp = useConvexMutation(api.bid.saveStampedSbdPackage);
+  const triggerApproval = useConvexMutation(api.bid.triggerApprovalShield);
+
   const seededForUserRef = useRef(false);
+  const activeUserIdRef = useRef<string | null>(null);
 
   useEffect(() => {
+    const nextUserId = currentUser?._id ? String(currentUser._id) : null;
+    if (activeUserIdRef.current && activeUserIdRef.current !== nextUserId) {
+      seededForUserRef.current = false;
+      resetClientWorkspaceSnapshot();
+    }
+    activeUserIdRef.current = nextUserId;
+  }, [currentUser?._id]);
+
+  useEffect(() => {
+    const isDemoAccount =
+      currentUser?.username?.trim().toLowerCase() === DEMO_USERNAME;
     if (
       isAuthenticated &&
+      isDemoAccount &&
       liveState &&
       liveState.docs.length === 0 &&
       !seededForUserRef.current
@@ -163,28 +199,46 @@ function ConvexLiveBridge() {
         seededForUserRef.current = false;
       });
     }
-  }, [isAuthenticated, liveState, ensureDemoSeed]);
+  }, [isAuthenticated, currentUser?.username, liveState, ensureDemoSeed]);
 
   useEffect(() => {
     liveConvexMutators = {
-      upsertDoc: (args) => upsertDoc(args),
-      refreshCsd: () => refreshCsd({}),
+      generateComplianceUploadUrl: async () => {
+        try {
+          return await generateComplianceUploadUrl({});
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err ?? '');
+          if (msg.includes('Could not find public function')) {
+            return await legacyGenerateUploadUrl({});
+          }
+          throw err;
+        }
+      },
       saveBoq: (args) => saveBoq(args),
       saveStamp: (args) => saveStamp(args),
       triggerApproval: (args) => triggerApproval(args),
-      resolveApproval: (args) => resolveApproval(args),
     };
     return () => {
       liveConvexMutators = null;
     };
-  }, [upsertDoc, refreshCsd, saveBoq, saveStamp, triggerApproval, resolveApproval]);
+  }, [generateComplianceUploadUrl, legacyGenerateUploadUrl, saveBoq, saveStamp, triggerApproval]);
 
   useEffect(() => {
-    if (!liveState) return;
-    if (liveState.docs.length > 0) {
-      const mappedDocs: ComplianceDoc[] = liveState.docs.map((d) => ({
+    if (!isAuthenticated || !liveState || currentUser === undefined) return;
+    const isDemoAccount =
+      currentUser?.username?.trim().toLowerCase() === DEMO_USERNAME;
+
+    const filteredLiveDocs = isDemoAccount
+      ? liveState.docs
+      : liveState.docs.filter((d) => !isLegacySeededComplianceDoc(d));
+
+    const emptySlots = createEmptyComplianceDocs();
+    const mappedByType = new Map<ComplianceDocType, ComplianceDoc>();
+    for (const d of filteredLiveDocs) {
+      const docType = d.docType as ComplianceDocType;
+      mappedByType.set(docType, {
         id: d.docId,
-        type: d.docType as ComplianceDocType,
+        type: docType,
         title: d.title,
         shortLabel: d.shortLabel,
         referenceNumber: d.referenceNumber,
@@ -198,27 +252,96 @@ function ConvexLiveBridge() {
         daysUntilExpiry: d.daysUntilExpiry ?? null,
         status: d.status,
         alertReason: d.alertReason ?? null,
-      }));
-
-      const blockingAlerts = mappedDocs
-        .filter((d) => d.status === 'expired' || d.status === 'missing')
-        .map((d) => `${d.shortLabel}: ${d.alertReason ?? 'Missing'}`);
-      const warningAlerts = mappedDocs
-        .filter((d) => d.status === 'warning' && d.alertReason)
-        .map((d) => `${d.shortLabel}: ${d.alertReason}`);
-
-      setClientSnapshot((prev) => ({
-        ...prev,
-        compliance: {
-          docs: mappedDocs,
-          isBidReady: blockingAlerts.length === 0,
-          blockingAlerts,
-          warningAlerts,
-          lastCheckedAt: new Date().toISOString(),
-        },
-      }));
+      });
     }
-  }, [liveState]);
+
+    const mergedDocs = emptySlots.map(
+      (slot) => mappedByType.get(slot.type) ?? slot
+    );
+    const evaluatedSummary = evaluateComplianceSummary(mergedDocs);
+
+    const mappedTenders: TenderMatch[] = liveState.tenders.map((t) => ({
+      id: t.tenderId,
+      tenderNumber: t.tenderNumber,
+      title: t.title,
+      municipality: t.municipality,
+      region: t.region,
+      cidbGrade: t.cidbGrade,
+      closingDate: t.closingDate,
+      briefingDate: t.briefingDate ?? null,
+      briefingCompulsory: t.briefingCompulsory,
+      estimatedValueZar: t.estimatedValueZar,
+      matchScore: t.matchScore,
+      status: t.status,
+      portalUrl: t.portalUrl,
+      submissionChannel:
+        (t.submissionChannel as SubmissionChannel | undefined) ??
+        'etenders_esubmission',
+      complianceReady: evaluatedSummary.isBidReady,
+      complianceBlocks: evaluatedSummary.blockingAlerts,
+      summary: t.summary,
+      sbdFormsRequired: t.sbdFormsRequired,
+      stagedPdfFileName: t.stampedSbdFileName,
+      stagedPdfBase64: t.stampedSbdBase64,
+      stampedSbdStorageId: t.stampedSbdStorageId
+        ? String(t.stampedSbdStorageId)
+        : undefined,
+      stampedSbdPageCount: t.stampedSbdPageCount,
+      stampedSbdMethod: t.stampedSbdMethod,
+      publishedDate: t.publishedDate,
+      ocid: t.ocid,
+      procurementCategory: t.procurementCategory,
+    }));
+
+    const groupedApprovals: Record<string, ApprovalShieldState[]> = {};
+    for (const apr of liveState.approvals) {
+      const mapped: ApprovalShieldState = {
+        id: apr.approvalId,
+        bidId: apr.bidId,
+        tenderNumber: apr.tenderNumber,
+        actionType: apr.actionType,
+        status: apr.status,
+        totalBidZar: apr.totalBidZar,
+        vatZar: apr.vatZar,
+        grandTotalZar: apr.grandTotalZar,
+        targetResource: apr.targetResource,
+        commandPreview: apr.commandPreview,
+        complianceVerified: apr.complianceVerified,
+        complianceWarnings: apr.complianceWarnings,
+        requestedBy: apr.requestedBy,
+        requestedAt: apr.requestedAt,
+        approvedBy: apr.approvedBy ?? null,
+        approvedAt: apr.approvedAt ?? null,
+        boatSessionId: apr.boatSessionId ?? null,
+        mergedPackStorageId: apr.mergedPackStorageId
+          ? String(apr.mergedPackStorageId)
+          : undefined,
+        mergedPackUrl: apr.mergedPackUrl,
+        submissionChannel: apr.submissionChannel,
+        whatsappDispatched: apr.whatsappDispatched,
+      };
+      if (!groupedApprovals[apr.bidId]) {
+        groupedApprovals[apr.bidId] = [];
+      }
+      groupedApprovals[apr.bidId].push(mapped);
+    }
+    for (const key of Object.keys(groupedApprovals)) {
+      groupedApprovals[key].sort((a, b) =>
+        b.requestedAt.localeCompare(a.requestedAt)
+      );
+    }
+
+    setClientSnapshot((prev) => ({
+      ...prev,
+      compliance: evaluatedSummary,
+      tenders: mappedTenders,
+      approvalsByTender:
+        Object.keys(groupedApprovals).length > 0
+          ? { ...prev.approvalsByTender, ...groupedApprovals }
+          : prev.approvalsByTender,
+      usageSummary: liveState.usageSummary ?? prev.usageSummary,
+    }));
+  }, [isAuthenticated, liveState, currentUser]);
 
   return null;
 }
@@ -270,13 +393,24 @@ export function useHydrateConvexWorkspace(params: {
   }, [params.approvals, params.bidId, params.boq, params.compliance, params.tenders]);
 }
 
-export function useComplianceVaultQuery(fallback: ComplianceSummary): ComplianceSummary {
+export function useComplianceVaultQuery(
+  fallback: ComplianceSummary
+): ComplianceSummary {
   const store = useSyncExternalStore(
     subscribeSnapshot,
     getClientSnapshot,
     getClientSnapshot
   );
   return store.compliance ?? fallback;
+}
+
+export function useUsageSummaryQuery(): UsageSummary | null {
+  const store = useSyncExternalStore(
+    subscribeSnapshot,
+    getClientSnapshot,
+    getClientSnapshot
+  );
+  return store.usageSummary;
 }
 
 export function useTenderWorkspaceQuery(params: {
@@ -301,15 +435,18 @@ export function useTenderWorkspaceQuery(params: {
   });
 
   return useMemo(() => {
-    const bidKey =
-      params.bidId ?? params.initialTenders[0]?.id ?? 'ET-2026-WC-0842';
+    const activeTenders =
+      store.tenders.length > 0 ? store.tenders : params.initialTenders;
+    const bidKey = params.bidId ?? activeTenders[0]?.id ?? '';
     return {
       compliance: store.compliance ?? params.initialCompliance,
-      tenders: store.tenders.length > 0 ? store.tenders : params.initialTenders,
-      boqItems: store.boqsByTender[bidKey] ?? params.initialBoq ?? [],
-      approvals:
-        store.approvalsByTender[bidKey] ?? params.initialApprovals ?? [],
-      stagedPdf: store.stagedPdfsByTender[bidKey] ?? null,
+      tenders: activeTenders,
+      boqItems: bidKey ? (store.boqsByTender[bidKey] ?? params.initialBoq ?? []) : [],
+      approvals: bidKey
+        ? (store.approvalsByTender[bidKey] ?? params.initialApprovals ?? [])
+        : [],
+      stagedPdf: bidKey ? (store.stagedPdfsByTender[bidKey] ?? null) : null,
+      usageSummary: store.usageSummary,
     };
   }, [
     params.bidId,
@@ -330,25 +467,54 @@ export function useUploadComplianceMutation() {
       expiresAt?: string | null;
       fileName: string;
       fileSizeBytes: number;
+      file?: File | null;
       storageId?: string;
     }) => {
-      if (liveConvexMutators) {
-        try {
-          await liveConvexMutators.upsertDoc({
-            docType: payload.type,
-            referenceNumber: payload.referenceNumber,
-            issuedAt: payload.issuedAt,
-            expiresAt: payload.expiresAt ?? null,
-            fileName: payload.fileName,
-            fileSizeBytes: payload.fileSizeBytes,
-            storageId: payload.storageId,
-          });
-        } catch (err) {
-          console.warn('[Convex] Live mutation fallback:', err);
+      let resolvedStorageId = payload.storageId;
+
+      if (payload.file && !resolvedStorageId) {
+        if (!liveConvexMutators) {
+          throw new Error(
+            'Convex Storage upload session unavailable — please refresh and retry.'
+          );
         }
+        const uploadUrl =
+          await liveConvexMutators.generateComplianceUploadUrl();
+        const uploadRes = await fetch(uploadUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': payload.file.type || 'application/pdf',
+          },
+          body: payload.file,
+        });
+        if (!uploadRes.ok) {
+          throw new Error(
+            `Failed to upload file to Convex Storage (${uploadRes.status})`
+          );
+        }
+        const json = (await uploadRes.json()) as { storageId?: string };
+        if (!json.storageId) {
+          throw new Error('Convex Storage returned no storageId');
+        }
+        resolvedStorageId = json.storageId;
       }
 
-      const summary = await uploadComplianceDocAction(payload);
+      if (!resolvedStorageId) {
+        throw new Error(
+          'Please select a PDF or certified image file to upload into Convex Storage.'
+        );
+      }
+
+      const summary = await uploadComplianceDocAction({
+        type: payload.type,
+        referenceNumber: payload.referenceNumber,
+        issuedAt: payload.issuedAt,
+        expiresAt: payload.expiresAt ?? null,
+        fileName: payload.file?.name ?? payload.fileName,
+        fileSizeBytes: payload.file?.size ?? payload.fileSizeBytes,
+        storageId: resolvedStorageId,
+      });
+
       const vault = await getComplianceVaultAction();
       setClientSnapshot((prev) => ({
         ...prev,
@@ -361,50 +527,20 @@ export function useUploadComplianceMutation() {
   );
 }
 
-export function useRefreshCsdMutation() {
-  return useCallback(async () => {
-    if (liveConvexMutators) {
-      try {
-        await liveConvexMutators.refreshCsd();
-      } catch (err) {
-        console.warn('[Convex] Live refreshCsd fallback:', err);
-      }
-    }
-
-    const summary = await refreshCsdReportAction();
-    const vault = await getComplianceVaultAction();
+export function useRunPortalScanMutation() {
+  return useCallback(async (preferences?: TenderScanPreferences) => {
+    const tenders = await runPortalScanAction(preferences);
     setClientSnapshot((prev) => ({
       ...prev,
-      compliance: summary,
-      tenders: vault.tenders,
+      tenders,
     }));
-    return summary;
+    return tenders;
   }, []);
 }
 
 export function useSaveBoqMutation() {
   return useCallback(async (bidId: string, items: BoQItem[]) => {
     const saved = await saveBoqItemsAction(bidId, items);
-    if (liveConvexMutators) {
-      try {
-        await liveConvexMutators.saveBoq({
-          tenderId: bidId,
-          items: saved.map((i) => ({
-            itemId: i.id,
-            itemCode: i.itemCode,
-            section: i.section,
-            description: i.description,
-            unit: i.unit,
-            quantity: i.quantity,
-            rateZar: i.rateZar,
-            amountZar: i.amountZar,
-          })),
-        });
-      } catch (err) {
-        console.warn('[Convex] Live saveBoq fallback:', err);
-      }
-    }
-
     setClientSnapshot((prev) => ({
       ...prev,
       boqsByTender: { ...prev.boqsByTender, [bidId]: saved },
@@ -417,20 +553,6 @@ export function useStampSbdMutation() {
   return useCallback(
     async (params: { bidId: string; grandTotalZar: number }) => {
       const result = await stampSbdFormsAction(params);
-      if (liveConvexMutators) {
-        try {
-          await liveConvexMutators.saveStamp({
-            tenderId: params.bidId,
-            fileName: result.fileName,
-            base64Pdf: result.base64Pdf,
-            pageCount: result.pageCount,
-            stampingMethod: result.stampingMethod,
-          });
-        } catch (err) {
-          console.warn('[Convex] Live saveStamp fallback:', err);
-        }
-      }
-
       setClientSnapshot((prev) => ({
         ...prev,
         stagedPdfsByTender: {
@@ -469,28 +591,6 @@ export function useTriggerApprovalShieldMutation() {
       boatSessionId?: string | null;
     }) => {
       const created = await triggerApprovalShieldAction(payload);
-      if (liveConvexMutators) {
-        try {
-          await liveConvexMutators.triggerApproval({
-            approvalId: created.id,
-            bidId: created.bidId,
-            tenderNumber: created.tenderNumber,
-            actionType: created.actionType,
-            totalBidZar: created.totalBidZar,
-            vatZar: created.vatZar,
-            grandTotalZar: created.grandTotalZar,
-            targetResource: created.targetResource,
-            commandPreview: created.commandPreview,
-            complianceVerified: created.complianceVerified,
-            complianceWarnings: created.complianceWarnings,
-            requestedBy: created.requestedBy,
-            boatSessionId: created.boatSessionId,
-          });
-        } catch (err) {
-          console.warn('[Convex] Live triggerApproval fallback:', err);
-        }
-      }
-
       const fresh = await getBidWorkspaceAction(payload.bidId);
       setClientSnapshot((prev) => ({
         ...prev,
@@ -516,23 +616,11 @@ export function useResolveApprovalShieldMutation() {
       decision: 'approved' | 'rejected';
       operatorName?: string;
     }) => {
-      const updated = await resolveApprovalShieldAction({
+      const result = await resolveApprovalShieldAction({
         approvalId: params.approvalId,
         decision: params.decision,
         operatorName: params.operatorName,
       });
-
-      if (liveConvexMutators) {
-        try {
-          await liveConvexMutators.resolveApproval({
-            approvalId: params.approvalId,
-            decision: params.decision,
-            operatorName: params.operatorName,
-          });
-        } catch (err) {
-          console.warn('[Convex] Live resolveApproval fallback:', err);
-        }
-      }
 
       const fresh = await getBidWorkspaceAction(params.bidId);
       setClientSnapshot((prev) => ({
@@ -547,7 +635,7 @@ export function useResolveApprovalShieldMutation() {
             : t
         ),
       }));
-      return updated;
+      return result;
     },
     []
   );

@@ -11,6 +11,8 @@ function isProtectedWorkspacePath(pathname: string): boolean {
   return (
     pathname === '/desk' ||
     pathname.startsWith('/desk/') ||
+    pathname === '/onboarding' ||
+    pathname.startsWith('/onboarding/') ||
     pathname === '/vault' ||
     pathname.startsWith('/vault/') ||
     pathname === '/bid' ||
@@ -24,6 +26,10 @@ const baseProxy = convexAuthNextjsProxy(async (request, { isAuthenticated }) => 
 
   if (pathname === '/' && authed && searchParams.get('landing') !== 'true') {
     return NextResponse.redirect(buildPublicRedirectUrl(request, '/desk'));
+  }
+
+  if (pathname === '/signup' && authed) {
+    return NextResponse.redirect(buildPublicRedirectUrl(request, '/onboarding'));
   }
 
   if (AUTH_PAGES.has(pathname) && authed) {

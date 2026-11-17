@@ -14,6 +14,8 @@ import {
   Save,
   Loader2,
   CheckCircle2,
+  AlertCircle,
+  MessageSquare,
 } from 'lucide-react';
 import { formatSpacedRand, getShortTenderLabel } from '@/lib/format';
 import {
@@ -43,12 +45,19 @@ interface LiveSandboxDrawerProps {
   approvals: ApprovalShieldState[];
   stagedPdf: StampedSbdResult | null;
   onOpenVaultModal: () => void;
+  onApprovalResolved?: (decision: 'approved' | 'rejected') => void;
 }
 
 function formatCountdown(seconds: number): string {
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+function formatChannelLabel(channel?: string): string {
+  if (channel === 'municipal_email') return 'Municipal SCM Email';
+  if (channel === 'physical_tender_box') return 'Physical Tender Box';
+  return 'eTenders Portal (Manual Sign-In + CAPTCHA)';
 }
 
 export function LiveSandboxDrawer({
@@ -61,6 +70,7 @@ export function LiveSandboxDrawer({
   approvals,
   stagedPdf,
   onOpenVaultModal,
+  onApprovalResolved,
 }: LiveSandboxDrawerProps) {
   const saveBoq = useSaveBoqMutation();
   const stampSbd = useStampSbdMutation();
@@ -74,6 +84,7 @@ export function LiveSandboxDrawer({
   const [isSavingBoq, setIsSavingBoq] = useState(false);
   const [boqSaved, setBoqSaved] = useState(false);
   const [isStagingApproval, setIsStagingApproval] = useState(false);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
 
   const subtotalZar = useMemo(
     () =>
@@ -102,10 +113,15 @@ export function LiveSandboxDrawer({
 
   const handleLaunchVm = async () => {
     setIsStartingVm(true);
+    setApprovalError(null);
     try {
       const session = await startBoatSessionAction(tender.id, tender.portalUrl);
       setBoatSession(session);
       setRemainingSeconds(session.ttlSeconds);
+    } catch (err) {
+      setApprovalError(
+        err instanceof Error ? err.message : 'Unable to launch browser handoff'
+      );
     } finally {
       setIsStartingVm(false);
     }
@@ -146,11 +162,16 @@ export function LiveSandboxDrawer({
 
   const handleStampSbd = async () => {
     setIsStamping(true);
+    setApprovalError(null);
     try {
       await stampSbd({
         bidId: tender.id,
         grandTotalZar,
       });
+    } catch (err) {
+      setApprovalError(
+        err instanceof Error ? err.message : 'Failed to stamp SBD package'
+      );
     } finally {
       setIsStamping(false);
     }
@@ -172,6 +193,7 @@ export function LiveSandboxDrawer({
 
   const handleRequestSubmitApproval = async () => {
     setIsStagingApproval(true);
+    setApprovalError(null);
     try {
       await triggerApproval({
         bidId: tender.id,
@@ -181,9 +203,13 @@ export function LiveSandboxDrawer({
         vatZar,
         grandTotalZar,
         targetResource: tender.portalUrl,
-        commandPreview: `stagehand.submitBid({ tender: "${tender.tenderNumber}", total: "${formatSpacedRand(grandTotalZar, 2)}" })`,
+        commandPreview: `stagehand.prepareSubmissionPack({ tender: "${tender.tenderNumber}", total: "${formatSpacedRand(grandTotalZar, 2)}" })`,
         boatSessionId: boatSession?.sessionId ?? null,
       });
+    } catch (err) {
+      setApprovalError(
+        err instanceof Error ? err.message : 'Unable to stage Approval Shield'
+      );
     } finally {
       setIsStagingApproval(false);
     }
@@ -205,12 +231,9 @@ export function LiveSandboxDrawer({
           <div className="px-4 py-3 border-b border-white/[0.06] flex items-center justify-between gap-2 shrink-0">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
+                <span className="size-1.5 rounded-full bg-emerald-400 shrink-0" />
                 <span className="text-xs font-semibold text-zinc-100 truncate">
                   {getShortTenderLabel(tender)}
-                </span>
-                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-white/[0.04] border border-white/[0.08] text-[10px] text-zinc-300 shrink-0">
-                  <span className="size-1.5 rounded-full bg-emerald-400" />
-                  Live Sandbox • 60fps
                 </span>
               </div>
               <div className="text-[11px] font-mono text-zinc-500 tabular-nums mt-0.5">
@@ -231,7 +254,7 @@ export function LiveSandboxDrawer({
 
           {/* Scrollable Body */}
           <div className="flex-1 overflow-y-auto p-4 space-y-5">
-            {/* 1. boat.dev 10m Live Browser Frame */}
+            {/* 1. Browser Handoff & SBD Returnables */}
             <section className="rounded-2xl bg-[#18181B] border border-white/[0.06] overflow-hidden">
               <div className="px-3.5 py-2.5 border-b border-white/[0.06] flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 text-[11px] font-mono text-zinc-400 min-w-0">
@@ -244,7 +267,7 @@ export function LiveSandboxDrawer({
                     type="button"
                     onClick={handleStampSbd}
                     disabled={isStamping}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/[0.05] hover:bg-white/[0.09] border border-white/[0.08] text-[11px] font-medium text-zinc-200 cursor-pointer"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/[0.05] hover:bg-white/[0.09] border border-white/[0.08] text-[11px] font-medium text-zinc-200 cursor-pointer"
                   >
                     {isStamping ? (
                       <Loader2 className="size-3 animate-spin" />
@@ -258,7 +281,7 @@ export function LiveSandboxDrawer({
                     type="button"
                     onClick={handleLaunchVm}
                     disabled={isStartingVm}
-                    className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-zinc-100 hover:bg-white text-zinc-950 text-[11px] font-semibold border-none cursor-pointer"
+                    className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 text-[11px] font-semibold border-none cursor-pointer"
                   >
                     {isStartingVm ? (
                       <Loader2 className="size-3 animate-spin" />
@@ -267,7 +290,7 @@ export function LiveSandboxDrawer({
                     ) : (
                       <Play className="size-3" />
                     )}
-                    <span>{boatSession ? 'Reset VM' : 'Launch 10m VM'}</span>
+                    <span>{boatSession ? 'Reset Browser' : 'Open eTenders Handoff'}</span>
                   </button>
                 </div>
               </div>
@@ -284,11 +307,11 @@ export function LiveSandboxDrawer({
                   <div className="flex items-center justify-between gap-2 text-xs">
                     <span className="text-zinc-300 font-medium">
                       {boatSession
-                        ? `Session ${boatSession.sessionId} (noEnv: true)`
-                        : 'eTenders.gov.za Staging Sandbox Ready'}
+                        ? `Contractor Handoff Session (${boatSession.sessionId})`
+                        : formatChannelLabel(tender.submissionChannel)}
                     </span>
                     <span className="text-[10.5px] font-mono text-zinc-500">
-                      HEADLESS=false
+                      noEnv: true
                     </span>
                   </div>
 
@@ -344,7 +367,7 @@ export function LiveSandboxDrawer({
                   type="button"
                   onClick={handleSaveBoq}
                   disabled={isSavingBoq}
-                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/[0.05] hover:bg-white/[0.09] border border-white/[0.08] text-[11px] font-medium text-zinc-200 cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-white/[0.05] hover:bg-white/[0.09] border border-white/[0.08] text-[11px] font-medium text-zinc-200 cursor-pointer"
                 >
                   {isSavingBoq ? (
                     <Loader2 className="size-3 animate-spin" />
@@ -355,104 +378,110 @@ export function LiveSandboxDrawer({
                 </button>
               </div>
 
-              <div
-                tabIndex={0}
-                role="region"
-                aria-labelledby="boq-table-caption"
-                className="table-wrapper rounded-xl border border-white/[0.06] bg-[#111113]"
-              >
-                <table className="boq-table text-xs">
-                  <caption id="boq-table-caption" className="sr-only">
-                    Bill of Quantities pricing items for {tender.tenderNumber}
-                  </caption>
-                  <thead>
-                    <tr className="border-b border-white/[0.06] text-[10.5px] uppercase tracking-wider text-zinc-500">
-                      <th scope="col" className="text-left px-3 py-2 font-medium">
-                        Code
-                      </th>
-                      <th scope="col" className="text-left px-3 py-2 font-medium">
-                        Item Description
-                      </th>
-                      <th scope="col" className="text-left px-3 py-2 font-medium">
-                        Unit
-                      </th>
-                      <th scope="col" className="text-right px-3 py-2 font-medium">
-                        Qty
-                      </th>
-                      <th scope="col" className="text-right px-3 py-2 font-medium">
-                        Rate (R)
-                      </th>
-                      <th scope="col" className="text-right px-3 py-2 font-medium">
-                        Total (R)
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {boqItems.map((item) => {
-                      const lineTotal =
-                        Number(item.quantity) * Number(item.rateZar);
-                      return (
-                        <tr
-                          key={item.id}
-                          className="border-b border-white/[0.04] last:border-b-0"
-                        >
-                          <th
-                            scope="row"
-                            className="text-left px-3 py-2 font-mono text-zinc-300 font-medium whitespace-nowrap"
+              {boqItems.length === 0 ? (
+                <div className="rounded-xl border border-white/[0.06] bg-[#111113] px-4 py-6 text-center text-xs text-zinc-500">
+                  No Bill of Quantities lines imported for this tender yet. Drop the tender PDF into KlerkDesk chat to extract line items.
+                </div>
+              ) : (
+                <div
+                  tabIndex={0}
+                  role="region"
+                  aria-labelledby="boq-table-caption"
+                  className="table-wrapper rounded-xl border border-white/[0.06] bg-[#111113]"
+                >
+                  <table className="boq-table text-xs">
+                    <caption id="boq-table-caption" className="sr-only">
+                      Bill of Quantities pricing items for {tender.tenderNumber}
+                    </caption>
+                    <thead>
+                      <tr className="border-b border-white/[0.06] text-[10.5px] uppercase tracking-wider text-zinc-500">
+                        <th scope="col" className="text-left px-3 py-2 font-medium">
+                          Code
+                        </th>
+                        <th scope="col" className="text-left px-3 py-2 font-medium">
+                          Item Description
+                        </th>
+                        <th scope="col" className="text-left px-3 py-2 font-medium">
+                          Unit
+                        </th>
+                        <th scope="col" className="text-right px-3 py-2 font-medium">
+                          Qty
+                        </th>
+                        <th scope="col" className="text-right px-3 py-2 font-medium">
+                          Rate (R)
+                        </th>
+                        <th scope="col" className="text-right px-3 py-2 font-medium">
+                          Total (R)
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {boqItems.map((item) => {
+                        const lineTotal =
+                          Number(item.quantity) * Number(item.rateZar);
+                        return (
+                          <tr
+                            key={item.id}
+                            className="border-b border-white/[0.04] last:border-b-0"
                           >
-                            {item.itemCode}
-                          </th>
-                          <td className="px-3 py-2 text-zinc-200 min-w-[160px]">
-                            <div className="truncate max-w-[200px]" title={item.description}>
-                              {item.description}
-                            </div>
-                          </td>
-                          <td className="px-3 py-2 font-mono text-zinc-400 whitespace-nowrap">
-                            {item.unit}
-                          </td>
-                          <td className="px-3 py-2 text-right">
-                            <input
-                              type="number"
-                              min={0}
-                              step="any"
-                              aria-label={`Quantity for ${item.itemCode}`}
-                              value={item.quantity}
-                              onChange={(e) =>
-                                handleEditBoqCell(
-                                  item.id,
-                                  'quantity',
-                                  e.target.value
-                                )
-                              }
-                              className="w-16 text-right font-mono tabular-nums rounded-md bg-[#0C0C0D] border border-white/10 px-1.5 py-1 text-[11px] text-zinc-100 outline-none focus:border-white/25"
-                            />
-                          </td>
-                          <td className="px-3 py-2 text-right">
-                            <input
-                              type="number"
-                              min={0}
-                              step="any"
-                              aria-label={`Rate for ${item.itemCode}`}
-                              value={item.rateZar}
-                              onChange={(e) =>
-                                handleEditBoqCell(
-                                  item.id,
-                                  'rateZar',
-                                  e.target.value
-                                )
-                              }
-                              className="w-24 text-right font-mono tabular-nums rounded-md bg-[#0C0C0D] border border-white/10 px-1.5 py-1 text-[11px] text-zinc-100 outline-none focus:border-white/25"
-                            />
-                          </td>
-                          <td className="px-3 py-2 text-right font-mono font-medium text-zinc-100 tabular-nums whitespace-nowrap">
-                            {formatSpacedRand(lineTotal)}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                            <th
+                              scope="row"
+                              className="text-left px-3 py-2 font-mono text-zinc-300 font-medium whitespace-nowrap"
+                            >
+                              {item.itemCode}
+                            </th>
+                            <td className="px-3 py-2 text-zinc-200 min-w-[160px]">
+                              <div className="truncate max-w-[200px]" title={item.description}>
+                                {item.description}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 font-mono text-zinc-400 whitespace-nowrap">
+                              {item.unit}
+                            </td>
+                            <td className="px-3 py-2 text-right">
+                              <input
+                                type="number"
+                                min={0}
+                                step="any"
+                                aria-label={`Quantity for ${item.itemCode}`}
+                                value={item.quantity}
+                                onChange={(e) =>
+                                  handleEditBoqCell(
+                                    item.id,
+                                    'quantity',
+                                    e.target.value
+                                  )
+                                }
+                                className="w-16 text-right font-mono tabular-nums rounded-md bg-[#0C0C0D] border border-white/10 px-1.5 py-1 text-[11px] text-zinc-100 outline-none focus:border-white/25"
+                              />
+                            </td>
+                            <td className="px-3 py-2 text-right">
+                              <input
+                                type="number"
+                                min={0}
+                                step="any"
+                                aria-label={`Rate for ${item.itemCode}`}
+                                value={item.rateZar}
+                                onChange={(e) =>
+                                  handleEditBoqCell(
+                                    item.id,
+                                    'rateZar',
+                                    e.target.value
+                                  )
+                                }
+                                className="w-24 text-right font-mono tabular-nums rounded-md bg-[#0C0C0D] border border-white/10 px-1.5 py-1 text-[11px] text-zinc-100 outline-none focus:border-white/25"
+                              />
+                            </td>
+                            <td className="px-3 py-2 text-right font-mono font-medium text-zinc-100 tabular-nums whitespace-nowrap">
+                              {formatSpacedRand(lineTotal)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
 
               <div className="grid grid-cols-3 gap-2 pt-1 text-[11px]">
                 <div className="px-3 py-2 rounded-xl bg-[#111113] border border-white/[0.05]">
@@ -489,7 +518,7 @@ export function LiveSandboxDrawer({
                     <span>Approval Shield</span>
                   </h3>
                   <p className="text-[11px] text-zinc-400 mt-1 m-0">
-                    Submission pauses in Convex <code className="font-mono">pendingApprovals</code> until you explicitly sign off.
+                    Channel: {formatChannelLabel(tender.submissionChannel)}. Approving merges your <code className="font-mono">&lt;30MB</code> submission pack and opens eTenders for manual sign-in.
                   </p>
                 </div>
 
@@ -497,9 +526,9 @@ export function LiveSandboxDrawer({
                   type="button"
                   onClick={handleRequestSubmitApproval}
                   disabled={isStagingApproval}
-                  className="px-3.5 py-1.5 rounded-full bg-zinc-100 hover:bg-white text-zinc-950 text-[11px] font-semibold border-none cursor-pointer shrink-0 disabled:opacity-50"
+                  className="px-3.5 py-1.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 text-[11px] font-semibold border-none cursor-pointer shrink-0 disabled:opacity-50"
                 >
-                  {isStagingApproval ? 'Staging...' : 'Approve & Submit Bid'}
+                  {isStagingApproval ? 'Staging...' : 'Stage Approval'}
                 </button>
               </div>
 
@@ -511,10 +540,17 @@ export function LiveSandboxDrawer({
                   <button
                     type="button"
                     onClick={onOpenVaultModal}
-                    className="px-2.5 py-1 rounded-full bg-white/[0.06] hover:bg-white/[0.1] border border-white/10 text-[11px] text-zinc-200 cursor-pointer shrink-0"
+                    className="px-2.5 py-1 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] border border-white/10 text-[11px] text-zinc-200 cursor-pointer shrink-0"
                   >
                     Open Vault
                   </button>
+                </div>
+              )}
+
+              {approvalError && (
+                <div className="rounded-xl bg-rose-500/10 border border-rose-500/25 px-3 py-2 text-[11px] text-rose-200 flex items-center gap-2">
+                  <AlertCircle className="size-3.5 shrink-0" />
+                  <span>{approvalError}</span>
                 </div>
               )}
 
@@ -528,7 +564,8 @@ export function LiveSandboxDrawer({
                   riskLevel={compliance.isBidReady ? 'low' : 'high'}
                   confidenceScore={compliance.isBidReady ? 0.98 : 0.72}
                   status={
-                    latestApproval.status === 'executed'
+                    latestApproval.status === 'executed' ||
+                    latestApproval.status === 'approved'
                       ? 'approved'
                       : latestApproval.status === 'rejected'
                         ? 'rejected'
@@ -537,21 +574,65 @@ export function LiveSandboxDrawer({
                   disabled={!compliance.isBidReady}
                   onApprove={async (id) => {
                     if (!id) return;
-                    await resolveApproval({
-                      bidId: tender.id,
-                      approvalId: id,
-                      decision: 'approved',
-                    });
+                    setApprovalError(null);
+                    try {
+                      const res = await resolveApproval({
+                        bidId: tender.id,
+                        approvalId: id,
+                        decision: 'approved',
+                      });
+                      onApprovalResolved?.('approved');
+                      if (res?.boatSession) {
+                        setBoatSession(res.boatSession);
+                        setRemainingSeconds(res.boatSession.ttlSeconds);
+                      }
+                    } catch (err) {
+                      setApprovalError(
+                        err instanceof Error
+                          ? err.message
+                          : 'Approval execution failed'
+                      );
+                      throw err;
+                    }
                   }}
                   onReject={async (id) => {
                     if (!id) return;
+                    setApprovalError(null);
                     await resolveApproval({
                       bidId: tender.id,
                       approvalId: id,
                       decision: 'rejected',
                     });
+                    onApprovalResolved?.('rejected');
                   }}
                 />
+              )}
+
+              {latestApproval?.mergedPackUrl && (
+                <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/25 p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium text-emerald-300">
+                      Consolidated Submission Pack Ready
+                    </span>
+                    <a
+                      href={latestApproval.mergedPackUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 text-[11px] font-semibold no-underline transition-colors"
+                    >
+                      <Download className="size-3" />
+                      <span>Download Consolidated Submission Pack (PDF)</span>
+                    </a>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[11px] text-zinc-300">
+                    <MessageSquare className="size-3 text-emerald-400 shrink-0" />
+                    <span>
+                      {latestApproval.whatsappDispatched
+                        ? 'WhatsApp confirmation with download link dispatched.'
+                        : 'Pack saved to Convex Storage (configure WhatsApp Cloud API credentials for instant alert dispatch).'}
+                    </span>
+                  </div>
+                </div>
               )}
             </section>
           </div>

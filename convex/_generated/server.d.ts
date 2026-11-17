@@ -30,8 +30,14 @@ import type { DataModel } from "./dataModel.js";
 type Env = {
   readonly CONVEX_CLOUD_URL: string;
   readonly CONVEX_SITE_URL: string;
+  readonly KLERK_INTERNAL_SECRET: string | undefined;
+  readonly OPENROUTER_API_KEY: string | undefined;
   readonly PASSKEY_ORIGIN: string | undefined;
   readonly PASSKEY_RP_ID: string | undefined;
+  readonly WHATSAPP_ACCESS_TOKEN: string | undefined;
+  readonly WHATSAPP_APP_SECRET: string | undefined;
+  readonly WHATSAPP_PHONE_NUMBER_ID: string | undefined;
+  readonly WHATSAPP_VERIFY_TOKEN: string | undefined;
 };
 
 /**

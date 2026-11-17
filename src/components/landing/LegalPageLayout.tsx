@@ -42,7 +42,7 @@ export function LegalPageLayout({
       <main className="flex-1 px-4 sm:px-6 py-12 sm:py-16">
         <article className="max-w-3xl mx-auto space-y-8">
           <div className="space-y-3 border-b border-white/[0.06] pb-6">
-            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-400/20 text-[11px] font-medium text-emerald-300">
+            <span className="block text-[11px] font-medium uppercase tracking-wider text-emerald-400">
               {badge}
             </span>
             <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-white m-0">

@@ -20,18 +20,35 @@ import {
   Square,
   Download,
 } from 'lucide-react';
+import { useConvexAuth, useQuery } from 'convex/react';
 import { Sidebar } from './Sidebar';
 import { MessageBubble } from './MessageBubble';
+import { TenderScanModal } from './TenderScanModal';
 import { CommandPalette } from '@/components/CommandPalette';
 import { SettingsModal } from '@/components/settings/SettingsModal';
 import { ModelSetupModal } from '@/components/ModelSetupModal';
 import { LiveSandboxDrawer } from '@/components/bid/LiveSandboxDrawer';
+import { KlerkMascot } from '@/components/KlerkMascot';
+import { deriveWorkspaceMascotMood } from '@/lib/mascot';
+import { api } from '@/convex/_generated/api';
 import {
   useResolveApprovalShieldMutation,
+  useRunPortalScanMutation,
   useTenderWorkspaceQuery,
   useTriggerApprovalShieldMutation,
 } from '@/lib/convex-react';
-import { askTenderQuestionAction } from '@/app/actions/chat';
+import {
+  askTenderQuestionAction,
+  getPersistedMessagesAction,
+  uploadAndIndexTenderPdfAction,
+} from '@/app/actions/chat';
+import {
+  parseScanPrefsFromRegions,
+  TENDER_SECTORS,
+  TENDER_SORT_OPTIONS,
+  type TenderScanPreferences,
+  type TenderSortOption,
+} from '@/lib/etenders-live';
 import {
   formatSpacedRand,
   getShortTenderLabel,
@@ -81,6 +98,7 @@ export function Dashboard({
 
   const triggerApproval = useTriggerApprovalShieldMutation();
   const resolveApproval = useResolveApprovalShieldMutation();
+  const runPortalScan = useRunPortalScanMutation();
 
   const selectedTender =
     tenders.find((t) => t.id === activeTender?.id) ?? activeTender ?? tenders[0];
@@ -89,17 +107,83 @@ export function Dashboard({
   );
 
   useEffect(() => {
-    if (liveBoqItems.length > 0) {
-      setBoqItems(liveBoqItems);
-    }
-  }, [liveBoqItems]);
+    setBoqItems(liveBoqItems.length > 0 ? liveBoqItems : initialBoq);
+  }, [activeTender?.id, initialBoq, liveBoqItems]);
 
+  const { isAuthenticated } = useConvexAuth();
+  const currentUser = useQuery(
+    api.users.currentUser,
+    isAuthenticated ? {} : 'skip'
+  );
   const [isVaultOpen, setIsVaultOpen] = useState(defaultVaultModalOpen);
   const [vaultDocType, setVaultDocType] = useState<ComplianceDocType | null>(null);
   const [isSandboxOpen, setIsSandboxOpen] = useState(defaultSandboxDrawerOpen);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isScanModalOpen, setIsScanModalOpen] = useState(false);
+  const [savedScanPrefs, setSavedScanPrefs] =
+    useState<TenderScanPreferences | null>(null);
+  const [isSortingTenders, setIsSortingTenders] = useState(false);
+  const [isPortalScanning, setIsPortalScanning] = useState(false);
+  const [justApproved, setJustApproved] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const approvalPulseTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (approvalPulseTimerRef.current !== null) {
+        window.clearTimeout(approvalPulseTimerRef.current);
+      }
+    };
+  }, []);
+
+  const triggerApprovedPulse = useCallback(() => {
+    setJustApproved(true);
+    if (approvalPulseTimerRef.current !== null) {
+      window.clearTimeout(approvalPulseTimerRef.current);
+    }
+    approvalPulseTimerRef.current = window.setTimeout(() => {
+      approvalPulseTimerRef.current = null;
+      setJustApproved(false);
+    }, 3000);
+  }, []);
+
+  useEffect(() => {
+    const userId = currentUser?._id ? String(currentUser._id) : null;
+    const fromConvex = parseScanPrefsFromRegions(
+      currentUser?.municipalRegions,
+      currentUser?.cidbGrade
+    ).scanPreferences;
+
+    if (fromConvex) {
+      setSavedScanPrefs(fromConvex);
+      if (userId && typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(
+            `klerk_scan_prefs_${userId}`,
+            JSON.stringify(fromConvex)
+          );
+        } catch {
+          // ignore storage quota errors
+        }
+      }
+      return;
+    }
+
+    if (userId && typeof window !== 'undefined') {
+      try {
+        const raw = window.localStorage.getItem(`klerk_scan_prefs_${userId}`);
+        if (raw) {
+          const parsed = JSON.parse(raw) as TenderScanPreferences;
+          if (Array.isArray(parsed.sectors) && parsed.sectors.length > 0) {
+            setSavedScanPrefs(parsed);
+          }
+        }
+      } catch {
+        // ignore parse errors
+      }
+    }
+  }, [currentUser?._id, currentUser?.cidbGrade, currentUser?.municipalRegions]);
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -109,6 +193,23 @@ export function Dashboard({
 
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let cancelled = false;
+    void getPersistedMessagesAction(selectedTender?.id)
+      .then((persisted) => {
+        if (!cancelled) {
+          setMessages(persisted);
+        }
+      })
+      .catch(() => {
+        // Keep current thread state if initial hydration fails
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, selectedTender?.id]);
 
   const openVault = useCallback((docType: ComplianceDocType | null = null) => {
     setVaultDocType(docType);
@@ -222,7 +323,81 @@ export function Dashboard({
         setTimeout(() => scrollEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 60);
       }
     },
-    [boqItems, compliance.isBidReady, isStreaming, selectedTender]
+    [boqItems, compliance.isBidReady, isStreaming, selectedTender, triggerApproval]
+  );
+
+  const executePortalScanWithPreferences = useCallback(
+    async (prefs: TenderScanPreferences) => {
+      setSavedScanPrefs(prefs);
+      const userId = currentUser?._id ? String(currentUser._id) : 'local';
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(
+            `klerk_scan_prefs_${userId}`,
+            JSON.stringify(prefs)
+          );
+        } catch {
+          // ignore storage quota errors
+        }
+      }
+
+      setIsPortalScanning(true);
+      let matched: TenderMatch[] = [];
+      try {
+        matched = await runPortalScan(prefs);
+      } finally {
+        setIsPortalScanning(false);
+      }
+      const sectorNames = prefs.sectors
+        .map((id) => TENDER_SECTORS.find((s) => s.id === id)?.shortLabel ?? id)
+        .join(', ');
+      const provinceNames = prefs.provinces.join(', ');
+      void sendConversationalPrompt(
+        `Scanned live National Treasury eTenders for ${sectorNames} opportunities in ${provinceNames} (${matched.length} matching tenders pulled into Tender Threads). Summarize the top match and required returnables.`
+      );
+    },
+    [currentUser?._id, runPortalScan, sendConversationalPrompt]
+  );
+
+  const handleTriggerPortalScan = useCallback(async () => {
+    if (!savedScanPrefs) {
+      setIsScanModalOpen(true);
+      return;
+    }
+    await executePortalScanWithPreferences(savedScanPrefs);
+  }, [executePortalScanWithPreferences, savedScanPrefs]);
+
+  const handleChangeSortOrder = useCallback(
+    async (nextSort: TenderSortOption) => {
+      if (!savedScanPrefs) {
+        setIsScanModalOpen(true);
+        return;
+      }
+      const updatedPrefs: TenderScanPreferences = {
+        ...savedScanPrefs,
+        sortBy: nextSort,
+        configuredAt: new Date().toISOString(),
+      };
+      setSavedScanPrefs(updatedPrefs);
+      const userId = currentUser?._id ? String(currentUser._id) : 'local';
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(
+            `klerk_scan_prefs_${userId}`,
+            JSON.stringify(updatedPrefs)
+          );
+        } catch {
+          // ignore storage quota errors
+        }
+      }
+      setIsSortingTenders(true);
+      try {
+        await runPortalScan(updatedPrefs);
+      } finally {
+        setIsSortingTenders(false);
+      }
+    },
+    [currentUser?._id, runPortalScan, savedScanPrefs]
   );
 
   // Global keyboard shortcuts (⌘K, ⌘,, and A / B / C quick choices when idle)
@@ -262,20 +437,26 @@ export function Dashboard({
       const key = e.key.toLowerCase();
       if (key === 'a') {
         e.preventDefault();
-        openVault('csd');
+        openVault(null);
       } else if (key === 'b') {
         e.preventDefault();
-        if (activeTender) {
+        if (tenders.length === 0) {
+          router.push('/onboarding');
+        } else if (activeTender) {
           setIsSandboxOpen(true);
-        } else {
-          router.push(`/bid/${selectedTender?.id ?? 'ET-2026-WC-0842'}`);
+        } else if (selectedTender) {
+          router.push(`/bid/${selectedTender.id}`);
         }
       } else if (key === 'c') {
         e.preventDefault();
-        sendConversationalPrompt(
-          `Run a full tender PDF audit on ${selectedTender?.tenderNumber ?? 'T/GEO/042/2026'} and check SBD 1/4/6.1.`,
-          'pdf_audit'
-        );
+        if (tenders.length === 0) {
+          void handleTriggerPortalScan();
+        } else {
+          void sendConversationalPrompt(
+            `Run a full tender PDF audit on ${selectedTender?.tenderNumber ?? 'T/GEO/042/2026'} and check SBD 1/4/6.1.`,
+            'pdf_audit'
+          );
+        }
       }
     };
 
@@ -283,6 +464,7 @@ export function Dashboard({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
     activeTender,
+    handleTriggerPortalScan,
     isCommandPaletteOpen,
     isSettingsOpen,
     isVaultOpen,
@@ -290,81 +472,190 @@ export function Dashboard({
     router,
     selectedTender,
     sendConversationalPrompt,
+    tenders.length,
   ]);
 
   const handleComposerKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      sendConversationalPrompt(input);
+      void sendConversationalPrompt(input);
     }
   };
+
+  const uploadTenderPdfFile = useCallback(
+    async (file: File) => {
+      if (isStreaming) return;
+      setDroppedFileName(file.name);
+      setIsStreaming(true);
+
+      const userMsg: Message = {
+        id: crypto.randomUUID(),
+        role: 'user',
+        content: `Upload & vector-index tender PDF: ${file.name} (${Math.max(1, Math.round(file.size / 1024))} KB)`,
+        timestamp: new Date(),
+        contentType: 'text',
+      };
+
+      const aiMsgId = crypto.randomUUID();
+      const pendingAi: Message = {
+        id: aiMsgId,
+        role: 'assistant',
+        content: '',
+        timestamp: new Date(),
+        contentType: 'markdown',
+        isThinking: true,
+      };
+
+      setMessages((prev) => [...prev, userMsg, pendingAi]);
+      setTimeout(() => scrollEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 40);
+
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        if (selectedTender?.id) {
+          formData.append('bidId', selectedTender.id);
+        }
+
+        const res = await uploadAndIndexTenderPdfAction(formData);
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === aiMsgId
+              ? {
+                  ...m,
+                  content: res.answer,
+                  isThinking: false,
+                  thinkingSteps: res.thinkingSteps,
+                  thinkingDuration: res.durationMs,
+                  sources: res.sources,
+                  modelUsed: res.model,
+                }
+              : m
+          )
+        );
+      } catch (err) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === aiMsgId
+              ? {
+                  ...m,
+                  content:
+                    err instanceof Error
+                      ? `Could not index tender PDF "${file.name}": ${err.message}`
+                      : `Could not index tender PDF "${file.name}".`,
+                  isThinking: false,
+                }
+              : m
+          )
+        );
+      } finally {
+        setIsStreaming(false);
+        setDroppedFileName(null);
+        setTimeout(() => scrollEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 60);
+      }
+    },
+    [isStreaming, selectedTender?.id]
+  );
 
   const handleDropPdf = (e: DragEvent<HTMLFormElement>) => {
     e.preventDefault();
     setIsDraggingPdf(false);
     const file = e.dataTransfer.files?.[0];
     if (file) {
-      setDroppedFileName(file.name);
-      sendConversationalPrompt(
-        `Audit uploaded tender PDF "${file.name}" against SBD 1/4/6.1 and our Compliance Vault.`,
-        'pdf_audit'
-      );
+      void uploadTenderPdfFile(file);
     }
   };
 
   const handleFilePick = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (file) {
-      setDroppedFileName(file.name);
-      sendConversationalPrompt(
-        `Audit uploaded tender PDF "${file.name}" against SBD 1/4/6.1 and our Compliance Vault.`,
-        'pdf_audit'
-      );
+      void uploadTenderPdfFile(file);
     }
   };
 
+  const uploadedDocsCount = compliance.docs.filter(
+    (d) => d.status !== 'missing'
+  ).length;
   const csdDoc = compliance.docs.find((d) => d.type === 'csd');
   const cipcDoc = compliance.docs.find((d) => d.type === 'cipc');
   const hasComplianceHold = !compliance.isBidReady;
+  const hasActiveTenders = tenders.length > 0;
 
   const bubble3Copy = hasComplianceHold
-    ? `Hold up on submission though — your CSD report is ${csdDoc?.ageDays ?? 9} days old and certified CIPC is ${cipcDoc?.ageDays ?? 96} days old. Everything else is staged and waiting on your yes.`
-    : `All 6 compliance docs are green. Your George bid (${formatSpacedRand(14_850_000)}) is staged and waiting on your yes.`;
+    ? uploadedDocsCount === 0
+      ? 'Your Compliance Vault currently has 0 of 6 statutory documents uploaded. Add your CSD, SARS Tax PIN, COIDA, B-BBEE, CIPC, and Certified IDs whenever you are ready.'
+      : `Hold up on submission though — ${(
+          compliance.blockingAlerts[0] ??
+          `your CSD report is ${csdDoc?.ageDays ?? 9} days old and certified CIPC is ${cipcDoc?.ageDays ?? 96} days old`
+        ).replace(/\.+$/, '')}.`
+    : `All 6 compliance docs are green. ${
+        selectedTender
+          ? `Your ${getShortTenderLabel(selectedTender)} bid (${formatSpacedRand(selectedTender.estimatedValueZar)}) is staged and waiting on your yes.`
+          : 'Your workspace is bid-ready for new tenders.'
+      }`;
 
-  const choiceCards = [
-    {
-      key: 'A',
-      title: hasComplianceHold
-        ? 'Review & upload CSD + CIPC in Compliance Vault'
-        : 'Inspect verified Compliance Vault (all 6 docs valid)',
-      subtitle: hasComplianceHold
-        ? 'CSD exceeds 7-day rule • CIPC exceeds 90-day rule'
-        : 'Tax PIN, CSD, COIDA, B-BBEE, CIPC & IDs active',
-      onClick: () => openVault(hasComplianceHold ? 'csd' : null),
-    },
-    {
-      key: 'B',
-      title: 'Inspect George — York St Upgrade BoQ & Approval Shield',
-      subtitle: `Waiting on your yes • ${formatSpacedRand(14_850_000)} • CIDB 6CE`,
-      onClick: () => {
-        if (activeTender) {
-          setIsSandboxOpen(true);
-        } else {
-          router.push(`/bid/${selectedTender?.id ?? 'ET-2026-WC-0842'}`);
-        }
-      },
-    },
-    {
-      key: 'C',
-      title: 'Run Claude Sonnet 5.5 audit on SBD 1 / 4 / 6.1 returnables',
-      subtitle: 'Checks compulsory clauses, PPR 2022 80/20 points & BoQ VAT',
-      onClick: () =>
-        sendConversationalPrompt(
-          `Run a full tender PDF audit on ${selectedTender?.tenderNumber ?? 'T/GEO/042/2026'} and verify SBD 1, SBD 4, and SBD 6.1.`,
-          'pdf_audit'
-        ),
-    },
-  ];
+  const choiceCards = hasActiveTenders
+    ? [
+        {
+          key: 'A',
+          title: hasComplianceHold
+            ? 'Review & upload documents in Compliance Vault'
+            : 'Inspect verified Compliance Vault (all 6 docs valid)',
+          subtitle: hasComplianceHold
+            ? `${uploadedDocsCount}/6 uploaded • CSD 7-day rule & CIPC 90-day rule`
+            : 'Tax PIN, CSD, COIDA, B-BBEE, CIPC & IDs active',
+          onClick: () => openVault(hasComplianceHold ? 'csd' : null),
+        },
+        {
+          key: 'B',
+          title: `Inspect ${selectedTender ? getShortTenderLabel(selectedTender) : 'Active Bid'} BoQ & Approval Shield`,
+          subtitle: `Waiting on your yes • ${formatSpacedRand(selectedTender?.estimatedValueZar ?? 14_850_000)} • CIDB ${selectedTender?.cidbGrade ?? '6CE'}`,
+          onClick: () => {
+            if (activeTender) {
+              setIsSandboxOpen(true);
+            } else if (selectedTender) {
+              router.push(`/bid/${selectedTender.id}`);
+            }
+          },
+        },
+        {
+          key: 'C',
+          title: 'Run Claude Sonnet 5.5 audit on SBD 1 / 4 / 6.1 returnables',
+          subtitle: 'Checks compulsory clauses, PPR 2022 80/20 points & BoQ VAT',
+          onClick: () =>
+            void sendConversationalPrompt(
+              `Run a full tender PDF audit on ${selectedTender?.tenderNumber ?? 'T/GEO/042/2026'} and verify SBD 1, SBD 4, and SBD 6.1.`,
+              'pdf_audit'
+            ),
+        },
+      ]
+    : [
+        {
+          key: 'A',
+          title: 'Upload statutory documents in your Compliance Vault',
+          subtitle: `${uploadedDocsCount} of 6 uploaded • CSD Report, SARS Tax PIN, COIDA, B-BBEE, CIPC & IDs`,
+          onClick: () => openVault(null),
+        },
+        {
+          key: 'B',
+          title: 'Complete Contractor Profile & Onboarding Setup',
+          subtitle: 'Set company legal name, MAAA number, CIDB grading & target municipalities',
+          onClick: () => router.push('/onboarding'),
+        },
+        {
+          key: 'C',
+          title: 'Scan eTenders & Municipal Portals for matching bids',
+          subtitle: 'Populate your Tender Threads with live South African opportunities',
+          onClick: () => void handleTriggerPortalScan(),
+        },
+      ];
+
+  const workspaceMood = deriveWorkspaceMascotMood({
+    compliance,
+    isScanning: isStreaming || isSortingTenders || isPortalScanning,
+    approvals,
+    justApproved,
+  });
 
   const bubbleSpring = {
     type: 'spring' as const,
@@ -380,15 +671,16 @@ export function Dashboard({
           compliance={compliance}
           tenders={tenders}
           activeBidId={activeTender?.id}
+          workspaceMood={workspaceMood}
+          sortBy={savedScanPrefs?.sortBy ?? 'best_match'}
+          isResorting={isSortingTenders}
+          onChangeSortBy={(nextSort) => void handleChangeSortOrder(nextSort)}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onOpenVaultModal={() => openVault(null)}
           onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
           onOpenLiveSandbox={() => setIsSandboxOpen(true)}
-          onTriggerNewScan={() =>
-            sendConversationalPrompt(
-              'Scan eTenders OCDS API and Western Cape municipal portals for fresh 6CE civil opportunities.'
-            )
-          }
+          onTriggerNewScan={() => void handleTriggerPortalScan()}
+          onOpenSectorPreferences={() => setIsScanModalOpen(true)}
         />
       </div>
 
@@ -406,6 +698,10 @@ export function Dashboard({
               compliance={compliance}
               tenders={tenders}
               activeBidId={activeTender?.id}
+              workspaceMood={workspaceMood}
+              sortBy={savedScanPrefs?.sortBy ?? 'best_match'}
+              isResorting={isSortingTenders}
+              onChangeSortBy={(nextSort) => void handleChangeSortOrder(nextSort)}
               onOpenSettings={() => {
                 setMobileSidebarOpen(false);
                 setIsSettingsOpen(true);
@@ -424,9 +720,11 @@ export function Dashboard({
               }}
               onTriggerNewScan={() => {
                 setMobileSidebarOpen(false);
-                sendConversationalPrompt(
-                  'Scan eTenders OCDS API and Western Cape municipal portals for fresh 6CE civil opportunities.'
-                );
+                void handleTriggerPortalScan();
+              }}
+              onOpenSectorPreferences={() => {
+                setMobileSidebarOpen(false);
+                setIsScanModalOpen(true);
               }}
             />
             <button
@@ -443,59 +741,51 @@ export function Dashboard({
 
       {/* Main Centered Stream Canvas (70%+ negative space around max-w-2xl) */}
       <div className="flex-1 flex flex-col min-w-0 h-dvh relative">
-        {/* Top Header Strip */}
+        {/* Minimalist Top Header Strip */}
         <header className="h-14 px-4 sm:px-6 flex items-center justify-between gap-3 shrink-0">
-          <div className="flex items-center gap-2 min-w-[88px]">
+          <div className="flex items-center gap-2 min-w-[40px]">
             <button
               type="button"
               onClick={() => setMobileSidebarOpen(true)}
               aria-label="Open menu"
-              className="md:hidden size-8 rounded-full bg-[#18181B] border border-white/[0.06] flex items-center justify-center text-zinc-400 cursor-pointer"
+              className="md:hidden size-8 rounded-lg bg-white/[0.04] border border-white/[0.06] flex items-center justify-center text-zinc-400 cursor-pointer"
             >
               <Menu className="size-4" />
             </button>
           </div>
 
-          {/* Centered Active Bot / Tender Pill */}
-          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#141416] border border-white/[0.06] text-xs font-medium text-zinc-200 truncate max-w-[280px] sm:max-w-md">
-            <span
-              className={`size-1.5 rounded-full shrink-0 ${
-                compliance.isBidReady ? 'bg-emerald-400' : 'bg-amber-400'
-              }`}
+          {/* Clean Centered Title */}
+          <div className="inline-flex items-center gap-2 text-xs font-medium text-zinc-300 truncate max-w-[280px] sm:max-w-md">
+            <KlerkMascot
+              variant="chief"
+              size={24}
+              followCursor={false}
+              mood={workspaceMood}
             />
             <span className="truncate">
               {activeTender
-                ? `KlerkDesk • ${getShortTenderLabel(activeTender)}`
+                ? `KlerkDesk · ${getShortTenderLabel(activeTender)}`
                 : 'KlerkDesk'}
             </span>
           </div>
 
-          {/* Right Router / Sandbox Pill & Drawer Toggle */}
-          <div className="flex items-center gap-2 shrink-0">
-            <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#141416] border border-white/[0.06] text-[11px] text-zinc-400">
-              {isSandboxOpen ? (
-                <>
-                  <span className="size-1.5 rounded-full bg-emerald-400" />
-                  <span>Live Sandbox • 60fps</span>
-                </>
-              ) : (
-                <span>Claude Sonnet 5.5</span>
-              )}
-            </span>
-
-            <button
-              type="button"
-              onClick={() => setIsSandboxOpen((v) => !v)}
-              aria-label="Toggle live browser & BoQ drawer"
-              title="Toggle live browser & BoQ drawer"
-              className={`size-8 rounded-full border flex items-center justify-center cursor-pointer transition-colors ${
-                isSandboxOpen
-                  ? 'bg-zinc-100 text-zinc-950 border-zinc-100'
-                  : 'bg-[#141416] hover:bg-[#1C1C1F] text-zinc-400 hover:text-zinc-100 border-white/[0.06]'
-              }`}
-            >
-              <PanelRight className="size-3.5" />
-            </button>
+          {/* Right Drawer Toggle */}
+          <div className="flex items-center justify-end gap-2 min-w-[40px] shrink-0">
+            {selectedTender && (
+              <button
+                type="button"
+                onClick={() => setIsSandboxOpen((v) => !v)}
+                aria-label="Toggle live browser & BoQ drawer"
+                title="Toggle live browser & BoQ drawer"
+                className={`size-8 rounded-lg border flex items-center justify-center cursor-pointer transition-colors ${
+                  isSandboxOpen
+                    ? 'bg-zinc-100 text-zinc-950 border-zinc-100'
+                    : 'bg-transparent hover:bg-white/[0.05] text-zinc-400 hover:text-zinc-100 border-white/[0.08]'
+                }`}
+              >
+                <PanelRight className="size-3.5" />
+              </button>
+            )}
           </div>
         </header>
 
@@ -504,85 +794,136 @@ export function Dashboard({
           <div className="max-w-2xl mx-auto space-y-5">
             {/* Stacked Narrative Chief-of-Staff Bubbles */}
             <div className="space-y-2.5">
-              <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={bubbleSpring}
-                className="max-w-xl bg-[#1C1C1F] border border-white/[0.06] rounded-2xl px-4 py-3 text-[13.5px] leading-relaxed text-zinc-200"
-              >
-                Morning. I scanned eTenders and 4 Western Cape municipalities at 06:30.
-              </motion.div>
+              {hasActiveTenders ? (
+                <>
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={bubbleSpring}
+                    className="max-w-xl bg-[#1C1C1F] border border-white/[0.06] rounded-2xl px-4 py-3 text-[13.5px] leading-relaxed text-zinc-200"
+                  >
+                    Live scan active on National Treasury eTenders &amp; OCDS
+                    {savedScanPrefs?.provinces?.length
+                      ? ` (${savedScanPrefs.provinces.join(', ')})`
+                      : ' (All South Africa)'}
+                    . Ordered by{' '}
+                    <span className="text-zinc-100 font-medium">
+                      {TENDER_SORT_OPTIONS.find(
+                        (o) => o.id === (savedScanPrefs?.sortBy ?? 'best_match')
+                      )?.label ?? 'Best Sector Match'}
+                    </span>
+                    .
+                  </motion.div>
 
-              <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ ...bubbleSpring, delay: 0.05 }}
-                className="max-w-xl bg-[#1C1C1F] border border-white/[0.06] rounded-2xl px-4 py-3 text-[13.5px] leading-relaxed text-zinc-200"
-              >
-                2 high-match tenders fit your CIDB 6CE PE profile: York Street Stormwater in George (
-                <span className="font-mono tabular-nums text-zinc-100">R 14 850 000</span>
-                , closes 27 Nov) and Oudtshoorn Bulk Water (
-                <span className="font-mono tabular-nums text-zinc-100">R 8 420 000</span>
-                , closes 4 Dec).
-              </motion.div>
-
-              <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ ...bubbleSpring, delay: 0.1 }}
-                className="max-w-xl bg-[#1C1C1F] border border-white/[0.06] rounded-2xl px-4 py-3 text-[13.5px] leading-relaxed text-zinc-200"
-              >
-                {activeTender ? (
-                  <>
-                    You’re looking at{' '}
-                    <span className="font-medium text-zinc-100">
-                      {getShortTenderLabel(activeTender)}
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ ...bubbleSpring, delay: 0.05 }}
+                    className="max-w-xl bg-[#1C1C1F] border border-white/[0.06] rounded-2xl px-4 py-3 text-[13.5px] leading-relaxed text-zinc-200"
+                  >
+                    <span className="font-mono tabular-nums text-zinc-100">
+                      {tenders.length}
                     </span>{' '}
-                    (<span className="font-mono">{activeTender.tenderNumber}</span>).{' '}
-                    {bubble3Copy}
-                  </>
-                ) : (
-                  bubble3Copy
-                )}
-              </motion.div>
+                    live {tenders.length === 1 ? 'tender fits' : 'tenders fit'} your{' '}
+                    {savedScanPrefs?.cidbGrade || currentUser?.cidbGrade || 'configured'}{' '}
+                    profile
+                    {tenders[0] ? (
+                      <>
+                        : <span className="text-zinc-100 font-medium">{tenders[0].title}</span> (
+                        <span className="font-mono tabular-nums text-zinc-100">
+                          {formatSpacedRand(tenders[0].estimatedValueZar)}
+                        </span>
+                        , closes{' '}
+                        {new Date(tenders[0].closingDate).toLocaleDateString('en-ZA', {
+                          day: '2-digit',
+                          month: 'short',
+                        })}
+                        )
+                        {tenders[1] ? (
+                          <>
+                            {' '}
+                            and <span className="text-zinc-100 font-medium">{tenders[1].title}</span> (
+                            <span className="font-mono tabular-nums text-zinc-100">
+                              {formatSpacedRand(tenders[1].estimatedValueZar)}
+                            </span>
+                            , closes{' '}
+                            {new Date(tenders[1].closingDate).toLocaleDateString('en-ZA', {
+                              day: '2-digit',
+                              month: 'short',
+                            })}
+                            )
+                          </>
+                        ) : null}
+                        .
+                      </>
+                    ) : (
+                      '.'
+                    )}
+                  </motion.div>
+
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ ...bubbleSpring, delay: 0.1 }}
+                    className="max-w-xl bg-[#1C1C1F] border border-white/[0.06] rounded-2xl px-4 py-3 text-[13.5px] leading-relaxed text-zinc-200"
+                  >
+                    {activeTender ? (
+                      <>
+                        You’re looking at{' '}
+                        <span className="font-medium text-zinc-100">
+                          {getShortTenderLabel(activeTender)}
+                        </span>{' '}
+                        (<span className="font-mono">{activeTender.tenderNumber}</span>).{' '}
+                        {bubble3Copy}
+                      </>
+                    ) : (
+                      bubble3Copy
+                    )}
+                  </motion.div>
+                </>
+              ) : (
+                <>
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={bubbleSpring}
+                    className="max-w-xl bg-[#1C1C1F] border border-white/[0.06] rounded-2xl px-4 py-3 text-[13.5px] leading-relaxed text-zinc-200"
+                  >
+                    Welcome to KlerkDesk. Your workspace starts clean with no pre-loaded tender threads or compliance files.
+                  </motion.div>
+
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ ...bubbleSpring, delay: 0.05 }}
+                    className="max-w-xl bg-[#1C1C1F] border border-white/[0.06] rounded-2xl px-4 py-3 text-[13.5px] leading-relaxed text-zinc-200"
+                  >
+                    Your Compliance Vault currently has{' '}
+                    <span className="font-mono tabular-nums text-zinc-100">
+                      {uploadedDocsCount} of 6
+                    </span>{' '}
+                    statutory documents uploaded. You can upload your CSD report, SARS Tax PIN, COIDA, B-BBEE, CIPC CoR 14.3, and Certified IDs now or add them later whenever you’re ready to stage a bid.
+                  </motion.div>
+
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ ...bubbleSpring, delay: 0.1 }}
+                    className="max-w-xl bg-[#1C1C1F] border border-white/[0.06] rounded-2xl px-4 py-3 text-[13.5px] leading-relaxed text-zinc-200"
+                  >
+                    To start a tender thread, drop a tender PDF into the composer below or run a live portal scan.
+                  </motion.div>
+                </>
+              )}
             </div>
 
-            {/* Inline Action Pills Beneath Bubbles */}
-            <motion.div
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ ...bubbleSpring, delay: 0.14 }}
-              className="flex flex-wrap items-center gap-2 pt-1"
-            >
-              <button
-                type="button"
-                onClick={() => openVault('csd')}
-                className="px-3.5 py-1.5 rounded-full bg-zinc-100 hover:bg-white text-zinc-950 text-xs font-medium border-none cursor-pointer transition-colors"
+            {stagedPdf && (
+              <motion.div
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ ...bubbleSpring, delay: 0.14 }}
+                className="pt-1"
               >
-                {hasComplianceHold ? 'Review & Upload CSD' : 'Open Compliance Vault'}
-              </button>
-
-              <button
-                type="button"
-                onClick={() =>
-                  activeTender
-                    ? setIsSandboxOpen(true)
-                    : router.push(`/bid/${selectedTender?.id ?? 'ET-2026-WC-0842'}`)
-                }
-                className="px-3.5 py-1.5 rounded-full bg-[#1C1C1F] hover:bg-zinc-800 text-zinc-200 text-xs font-medium border border-white/[0.08] cursor-pointer transition-colors"
-              >
-                Inspect George Bid
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setIsSandboxOpen((v) => !v)}
-                className="px-3.5 py-1.5 rounded-full bg-[#1C1C1F] hover:bg-zinc-800 text-zinc-200 text-xs font-medium border border-white/[0.08] cursor-pointer transition-colors"
-              >
-                View Live Browser
-              </button>
-
-              {stagedPdf && (
                 <button
                   type="button"
                   onClick={() => {
@@ -597,27 +938,13 @@ export function Dashboard({
                     a.click();
                     URL.revokeObjectURL(url);
                   }}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 text-xs font-medium border border-emerald-500/25 cursor-pointer transition-colors"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 text-xs font-medium border border-emerald-500/25 cursor-pointer transition-colors"
                 >
-                  <Download className="size-3" />
-                  <span>{stagedPdf.fileName}</span>
+                  <Download className="size-3.5" />
+                  <span>Download {stagedPdf.fileName}</span>
                 </button>
-              )}
-
-              {approvals[0] && (
-                <span
-                  className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-[11px] font-medium ${
-                    approvals[0].status === 'executed'
-                      ? 'bg-emerald-500/15 border-emerald-500/25 text-emerald-300'
-                      : approvals[0].status === 'rejected'
-                        ? 'bg-rose-500/15 border-rose-500/25 text-rose-300'
-                        : 'bg-amber-500/15 border-amber-500/25 text-amber-200'
-                  }`}
-                >
-                  Approval Shield: {approvals[0].status}
-                </span>
-              )}
-            </motion.div>
+              </motion.div>
+            )}
 
             {/* Single-Column Interactive Choice Cards (A, B, C) */}
             <motion.div
@@ -663,6 +990,7 @@ export function Dashboard({
                           decision: 'approved',
                         });
                       }
+                      triggerApprovedPulse();
                       setMessages((prev) =>
                         prev.map((m) =>
                           m.id === messageId && m.actionApproval
@@ -789,37 +1117,17 @@ export function Dashboard({
           isOpen={isSandboxOpen}
           onClose={() => setIsSandboxOpen(false)}
           tender={selectedTender}
-          boqItems={
-            boqItems.length > 0
-              ? boqItems
-              : [
-                  {
-                    id: 'fallback-1',
-                    itemCode: '1300',
-                    section: 'Section 1: Preliminary & General',
-                    description: 'Site establishment, OHS & traffic accommodation',
-                    unit: 'Sum',
-                    quantity: 1,
-                    rateZar: 1_150_000,
-                    amountZar: 1_150_000,
-                  },
-                  {
-                    id: 'fallback-2',
-                    itemCode: '4202',
-                    section: 'Section 4: Asphalt Surfacing',
-                    description: 'Medium asphalt wearing course (40mm)',
-                    unit: 'm²',
-                    quantity: 18_500,
-                    rateZar: 315,
-                    amountZar: 5_827_500,
-                  },
-                ]
-          }
+          boqItems={boqItems}
           onBoqChange={setBoqItems}
           compliance={compliance}
           approvals={approvals}
           stagedPdf={stagedPdf}
           onOpenVaultModal={() => openVault('csd')}
+          onApprovalResolved={(decision) => {
+            if (decision === 'approved') {
+              triggerApprovedPulse();
+            }
+          }}
         />
       )}
 
@@ -835,6 +1143,7 @@ export function Dashboard({
       <CommandPalette
         isOpen={isCommandPaletteOpen}
         onClose={() => setIsCommandPaletteOpen(false)}
+        activeTender={selectedTender}
         onOpenComplianceUploader={() => openVault('csd')}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenLiveSandbox={() => setIsSandboxOpen(true)}
@@ -849,6 +1158,15 @@ export function Dashboard({
           setIsSettingsOpen(false);
           openVault('csd');
         }}
+      />
+
+      {/* First-Time Sector Tailoring & Live eTenders Scan Modal */}
+      <TenderScanModal
+        isOpen={isScanModalOpen}
+        onClose={() => setIsScanModalOpen(false)}
+        initialPreferences={savedScanPrefs}
+        defaultCidbGrade={currentUser?.cidbGrade || ''}
+        onConfirmScan={executePortalScanWithPreferences}
       />
     </div>
   );

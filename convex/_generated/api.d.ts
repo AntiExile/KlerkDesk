@@ -9,8 +9,12 @@
  */
 
 import type * as auth from "../auth.js";
+import type * as bid from "../bid.js";
+import type * as chat from "../chat.js";
+import type * as compliance from "../compliance.js";
 import type * as crons from "../crons.js";
 import type * as tenderOps from "../tenderOps.js";
+import type * as tenders from "../tenders.js";
 import type * as users from "../users.js";
 
 import type {
@@ -21,8 +25,12 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
+  bid: typeof bid;
+  chat: typeof chat;
+  compliance: typeof compliance;
   crons: typeof crons;
   tenderOps: typeof tenderOps;
+  tenders: typeof tenders;
   users: typeof users;
 }>;
 

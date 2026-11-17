@@ -17,7 +17,6 @@ import {
   Circle,
   Loader2,
   Play,
-  ShieldCheck,
 } from 'lucide-react';
 import { api } from '@/convex/_generated/api';
 import { KlerkBrandLink } from '@/components/landing/KlerkLogo';
@@ -30,6 +29,7 @@ import {
   evaluateSignupPassword,
   type PasswordEvaluation,
 } from './password-validation';
+import { KlerkMascot, type KlerkMascotMood } from '@/components/KlerkMascot';
 
 const DEMO_USERNAME = 'demo@mundusmk.co.za';
 const DEMO_PASSWORD = 'KlerkDesk-Demo-2026!#Pilot';
@@ -209,6 +209,7 @@ function SignupPasswordStatusPanel({
 interface AuthCardViewProps {
   mode: 'login' | 'signup';
   selectedPlanBadge: string | null;
+  mascotMood: KlerkMascotMood;
   username: string;
   password: string;
   confirmPassword: string;
@@ -220,6 +221,8 @@ interface AuthCardViewProps {
   onUsernameChange: (val: string) => void;
   onPasswordChange: (val: string) => void;
   onConfirmPasswordChange: (val: string) => void;
+  onInputFocus: () => void;
+  onInputBlur: () => void;
   onSubmit: (e: FormEvent) => void;
   onDemoSandbox: () => void;
 }
@@ -227,6 +230,7 @@ interface AuthCardViewProps {
 function AuthCardView({
   mode,
   selectedPlanBadge,
+  mascotMood,
   username,
   password,
   confirmPassword,
@@ -238,6 +242,8 @@ function AuthCardView({
   onUsernameChange,
   onPasswordChange,
   onConfirmPasswordChange,
+  onInputFocus,
+  onInputBlur,
   onSubmit,
   onDemoSandbox,
 }: AuthCardViewProps) {
@@ -277,27 +283,24 @@ function AuthCardView({
 
       <main className="w-full max-w-md mx-auto my-8">
         <div className="bg-[#111113] border border-white/10 rounded-2xl p-8 shadow-2xl shadow-black/80 space-y-6">
-          <div className="space-y-1.5">
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-400/20 text-[11px] font-medium text-emerald-300">
-              <ShieldCheck className="size-3" />
-              <span>Convex Auth · POPIA Isolated</span>
-            </div>
-            <h1 className="text-xl font-semibold tracking-tight text-white m-0 pt-1">
-              {mode === 'login' ? 'Sign in to KlerkDesk' : 'Launch your KlerkDesk workspace'}
-            </h1>
-            <p className="text-xs text-zinc-400 m-0">
-              {mode === 'login'
-                ? 'Access your Compliance Vault, BoQ bid room, and Approval Shield.'
-                : 'Start your 14-day South African contractor pilot in seconds.'}
-            </p>
-            {selectedPlanBadge && (
-              <div className="pt-2">
-                <div className="inline-flex items-center gap-2 rounded-full bg-emerald-500/10 border border-emerald-500/30 px-3 py-1 text-xs font-medium text-emerald-300 tabular-nums">
-                  <CheckCircle2 className="size-3.5 text-emerald-400 shrink-0" />
+          <div className="flex flex-col items-center text-center space-y-2.5">
+            <KlerkMascot variant="chief" size={56} mood={mascotMood} />
+            <div className="space-y-1.5">
+              <h1 className="text-xl font-semibold tracking-tight text-white m-0">
+                {mode === 'login' ? 'Sign in to KlerkDesk' : 'Launch your KlerkDesk workspace'}
+              </h1>
+              <p className="text-xs text-zinc-400 m-0">
+                {mode === 'login'
+                  ? 'Access your Compliance Vault, BoQ bid room, and Approval Shield.'
+                  : 'Start your 14-day South African contractor pilot in seconds.'}
+              </p>
+              {selectedPlanBadge && (
+                <div className="pt-1 flex items-center justify-center gap-1.5 text-xs font-medium text-emerald-400 tabular-nums">
+                  <CheckCircle2 className="size-3.5 shrink-0" />
                   <span>{selectedPlanBadge}</span>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
           <form onSubmit={onSubmit} className="space-y-4">
@@ -314,6 +317,8 @@ function AuthCardView({
                 type={isSignup ? 'email' : 'text'}
                 required
                 value={username}
+                onFocus={onInputFocus}
+                onBlur={onInputBlur}
                 onChange={(e) => onUsernameChange(e.target.value)}
                 autoComplete={isSignup ? 'email' : 'username'}
                 placeholder="director@karoocivil.co.za"
@@ -336,6 +341,8 @@ function AuthCardView({
                 required
                 minLength={DEFAULT_MIN_PASSWORD_LENGTH}
                 value={password}
+                onFocus={onInputFocus}
+                onBlur={onInputBlur}
                 onChange={(e) => onPasswordChange(e.target.value)}
                 autoComplete={isSignup ? 'new-password' : 'current-password'}
                 placeholder={`At least ${DEFAULT_MIN_PASSWORD_LENGTH} characters`}
@@ -361,6 +368,8 @@ function AuthCardView({
                     required
                     minLength={DEFAULT_MIN_PASSWORD_LENGTH}
                     value={confirmPassword}
+                    onFocus={onInputFocus}
+                    onBlur={onInputBlur}
                     onChange={(e) => onConfirmPasswordChange(e.target.value)}
                     autoComplete="new-password"
                     placeholder="Re-enter your password"
@@ -471,24 +480,33 @@ function ConvexAuthCard({
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [demoPending, setDemoPending] = useState(false);
+  const [isFieldActive, setIsFieldActive] = useState(false);
+  const [authApproved, setAuthApproved] = useState(false);
   const demoAutoStartedRef = useRef(false);
   const hasNavigatedRef = useRef(false);
+  const signupFlowActiveRef = useRef(false);
 
   const isBusy = signInPending || signUpPending || demoPending;
+  const mascotMood: KlerkMascotMood = authApproved
+    ? 'approved'
+    : isFieldActive
+      ? 'scanning'
+      : 'idle';
   const passwordEvaluation = useMemo(
     () => evaluateSignupPassword(password, confirmPassword),
     [password, confirmPassword]
   );
 
-  const navigateToDesk = () => {
+  const navigateAfterAuth = (destination: '/desk' | '/onboarding') => {
+    setAuthApproved(true);
     if (hasNavigatedRef.current) return;
     hasNavigatedRef.current = true;
-    router.replace('/desk');
+    router.replace(destination);
   };
 
   useEffect(() => {
     if (isAuthenticated) {
-      navigateToDesk();
+      navigateAfterAuth(signupFlowActiveRef.current ? '/onboarding' : '/desk');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated, router]);
@@ -496,6 +514,7 @@ function ConvexAuthCard({
   const handleDemoSandbox = async () => {
     setError(null);
     setDemoPending(true);
+    signupFlowActiveRef.current = false;
     try {
       const loginResult = await signIn({
         username: DEMO_USERNAME,
@@ -503,7 +522,7 @@ function ConvexAuthCard({
       });
 
       if (loginResult.status === 'complete') {
-        navigateToDesk();
+        navigateAfterAuth('/desk');
         return;
       }
 
@@ -514,7 +533,7 @@ function ConvexAuthCard({
         });
 
         if (signUpResult.status === 'complete') {
-          navigateToDesk();
+          navigateAfterAuth('/desk');
           return;
         }
 
@@ -546,9 +565,10 @@ function ConvexAuthCard({
     setError(null);
 
     if (mode === 'login') {
+      signupFlowActiveRef.current = false;
       const result = await signIn({ username: username.trim(), password });
       if (result.status === 'complete') {
-        navigateToDesk();
+        navigateAfterAuth('/desk');
         return;
       }
       setError(formatSignInError(result));
@@ -565,11 +585,13 @@ function ConvexAuthCard({
       return;
     }
 
+    signupFlowActiveRef.current = true;
     const result = await signUp({ username: username.trim(), password });
     if (result.status === 'complete') {
-      navigateToDesk();
+      navigateAfterAuth('/onboarding');
       return;
     }
+    signupFlowActiveRef.current = false;
     setError(formatSignUpError(result));
   };
 
@@ -577,6 +599,7 @@ function ConvexAuthCard({
     <AuthCardView
       mode={mode}
       selectedPlanBadge={selectedPlanBadge}
+      mascotMood={mascotMood}
       username={username}
       password={password}
       confirmPassword={confirmPassword}
@@ -585,9 +608,20 @@ function ConvexAuthCard({
       isBusy={isBusy}
       isSubmitting={signInPending || signUpPending}
       demoPending={demoPending}
-      onUsernameChange={setUsername}
-      onPasswordChange={setPassword}
-      onConfirmPasswordChange={setConfirmPassword}
+      onUsernameChange={(val) => {
+        setIsFieldActive(true);
+        setUsername(val);
+      }}
+      onPasswordChange={(val) => {
+        setIsFieldActive(true);
+        setPassword(val);
+      }}
+      onConfirmPasswordChange={(val) => {
+        setIsFieldActive(true);
+        setConfirmPassword(val);
+      }}
+      onInputFocus={() => setIsFieldActive(true)}
+      onInputBlur={() => setIsFieldActive(false)}
       onSubmit={handleSubmit}
       onDemoSandbox={handleDemoSandbox}
     />
@@ -605,6 +639,7 @@ function UnconfiguredConvexAuthCard({
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [isFieldActive, setIsFieldActive] = useState(false);
 
   const passwordEvaluation = useMemo(
     () => evaluateSignupPassword(password, confirmPassword),
@@ -632,6 +667,7 @@ function UnconfiguredConvexAuthCard({
     <AuthCardView
       mode={mode}
       selectedPlanBadge={selectedPlanBadge}
+      mascotMood={isFieldActive ? 'scanning' : 'idle'}
       username={username}
       password={password}
       confirmPassword={confirmPassword}
@@ -640,9 +676,20 @@ function UnconfiguredConvexAuthCard({
       isBusy={false}
       isSubmitting={false}
       demoPending={false}
-      onUsernameChange={setUsername}
-      onPasswordChange={setPassword}
-      onConfirmPasswordChange={setConfirmPassword}
+      onUsernameChange={(val) => {
+        setIsFieldActive(true);
+        setUsername(val);
+      }}
+      onPasswordChange={(val) => {
+        setIsFieldActive(true);
+        setPassword(val);
+      }}
+      onConfirmPasswordChange={(val) => {
+        setIsFieldActive(true);
+        setConfirmPassword(val);
+      }}
+      onInputFocus={() => setIsFieldActive(true)}
+      onInputBlur={() => setIsFieldActive(false)}
       onSubmit={handleUnavailable}
       onDemoSandbox={() => handleUnavailable()}
     />

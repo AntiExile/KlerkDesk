@@ -9,6 +9,12 @@ const app = defineApp({
   env: {
     PASSKEY_RP_ID: v.optional(v.string()),
     PASSKEY_ORIGIN: v.optional(v.string()),
+    WHATSAPP_APP_SECRET: v.optional(v.string()),
+    WHATSAPP_VERIFY_TOKEN: v.optional(v.string()),
+    WHATSAPP_ACCESS_TOKEN: v.optional(v.string()),
+    WHATSAPP_PHONE_NUMBER_ID: v.optional(v.string()),
+    OPENROUTER_API_KEY: v.optional(v.string()),
+    KLERK_INTERNAL_SECRET: v.optional(v.string()),
   },
 });
 

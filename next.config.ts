@@ -30,8 +30,15 @@ function hydrateDevEnvFromDotEnvLocal() {
     }
 
     const existing = process.env[key];
+    const isInvalidOpenRouterKey =
+      key.startsWith('OPENROUTER_') &&
+      key.endsWith('_KEY') &&
+      Boolean(existing) &&
+      (!existing!.startsWith('sk-or-v1-') || existing!.length < 40);
     const isPlaceholder =
-      !existing || existing.includes('your-deployment');
+      !existing ||
+      existing.includes('your-deployment') ||
+      isInvalidOpenRouterKey;
 
     if (isPlaceholder && value) {
       process.env[key] = value;
@@ -42,6 +49,7 @@ function hydrateDevEnvFromDotEnvLocal() {
 hydrateDevEnvFromDotEnvLocal();
 
 const nextConfig: NextConfig = {
+  devIndicators: false,
   env: {
     ...(process.env.NEXT_PUBLIC_CONVEX_URL
       ? { NEXT_PUBLIC_CONVEX_URL: process.env.NEXT_PUBLIC_CONVEX_URL }
@@ -49,6 +57,11 @@ const nextConfig: NextConfig = {
     ...(process.env.NEXT_PUBLIC_CONVEX_SITE_URL
       ? { NEXT_PUBLIC_CONVEX_SITE_URL: process.env.NEXT_PUBLIC_CONVEX_SITE_URL }
       : {}),
+  },
+  experimental: {
+    serverActions: {
+      bodySizeLimit: '32mb',
+    },
   },
   serverExternalPackages: [
     'playwright-core',

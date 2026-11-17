@@ -1,6 +1,12 @@
 'use client';
 
-import { useState, useEffect, useRef, type ChangeEvent, type FormEvent } from 'react';
+import {
+  useState,
+  useEffect,
+  useRef,
+  type ChangeEvent,
+  type FormEvent,
+} from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Search,
@@ -13,15 +19,19 @@ import {
   UserCheck,
   UploadCloud,
   CheckCircle2,
+  AlertCircle,
   Loader2,
   RefreshCw,
 } from 'lucide-react';
 import {
   useComplianceVaultQuery,
-  useRefreshCsdMutation,
   useUploadComplianceMutation,
 } from '@/lib/convex-react';
-import type { ComplianceDoc, ComplianceDocType, ComplianceSummary } from '@/types';
+import type {
+  ComplianceDoc,
+  ComplianceDocType,
+  ComplianceSummary,
+} from '@/types';
 
 interface ModelSetupModalProps {
   isOpen: boolean;
@@ -61,7 +71,7 @@ const DOC_META: Record<
     needsExpiry: true,
   },
   bbbee: {
-    displayName: 'B-BBEE Certificate (Level 1)',
+    displayName: 'B-BBEE Certificate / Affidavit',
     icon: BadgeCheck,
     iconBg: 'bg-sky-500/15 text-sky-300 border-sky-500/20',
     needsExpiry: true,
@@ -81,6 +91,15 @@ const DOC_META: Record<
 };
 
 function formatRowSubtitle(doc: ComplianceDoc): string {
+  if (doc.status === 'missing') {
+    if (doc.type === 'csd') {
+      return 'Not uploaded yet • 7-day rule';
+    }
+    if (doc.type === 'cipc' || doc.type === 'certified_id') {
+      return 'Not uploaded yet • 90-day rule';
+    }
+    return 'Not uploaded yet';
+  }
   if (doc.type === 'csd') {
     if (doc.status === 'expired' && doc.daysUntilExpiry !== null) {
       return `Expired ${Math.abs(doc.daysUntilExpiry)}d ago • 7-day rule`;
@@ -114,19 +133,20 @@ export function ModelSetupModal({
   const dialogRef = useRef<HTMLDialogElement>(null);
   const reactiveCompliance = useComplianceVaultQuery(compliance);
   const uploadCompliance = useUploadComplianceMutation();
-  const refreshCsd = useRefreshCsdMutation();
   const [searchQuery, setSearchQuery] = useState('');
   const [filterTab, setFilterTab] = useState<FilterTab>('all');
   const [editingDoc, setEditingDoc] = useState<ComplianceDoc | null>(null);
   const [referenceNumber, setReferenceNumber] = useState('');
-  const [issuedAt, setIssuedAt] = useState(new Date().toISOString().slice(0, 10));
+  const [issuedAt, setIssuedAt] = useState(
+    new Date().toISOString().slice(0, 10)
+  );
   const [expiresAt, setExpiresAt] = useState(
     new Date(Date.now() + 365 * 86_400_000).toISOString().slice(0, 10)
   );
-  const [selectedFile, setSelectedFile] = useState<{ name: string; size: number } | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isSyncingCsd, setIsSyncingCsd] = useState(false);
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -135,11 +155,19 @@ export function ModelSetupModal({
     if (isOpen && !dialog.open) {
       dialog.showModal();
       setFeedbackMessage(null);
+      setErrorMessage(null);
       if (initialDocType) {
-        const target = compliance.docs.find((d) => d.type === initialDocType);
+        const target = reactiveCompliance.docs.find(
+          (d) => d.type === initialDocType
+        );
         if (target) {
           setEditingDoc(target);
-          setReferenceNumber(target.referenceNumber);
+          setReferenceNumber(
+            target.status === 'missing' ||
+              target.referenceNumber === 'Not uploaded'
+              ? ''
+              : target.referenceNumber
+          );
           setIssuedAt(new Date().toISOString().slice(0, 10));
         }
       } else {
@@ -148,9 +176,8 @@ export function ModelSetupModal({
     } else if (!isOpen && dialog.open) {
       dialog.close();
     }
-  }, [isOpen, initialDocType, compliance.docs]);
+  }, [isOpen, initialDocType, reactiveCompliance.docs]);
 
-  // Pointer-position light dismiss fallback where `closedby="any"` is unsupported
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
@@ -191,7 +218,11 @@ export function ModelSetupModal({
 
   const beginEdit = (doc: ComplianceDoc) => {
     setEditingDoc(doc);
-    setReferenceNumber(doc.referenceNumber);
+    setReferenceNumber(
+      doc.status === 'missing' || doc.referenceNumber === 'Not uploaded'
+        ? ''
+        : doc.referenceNumber
+    );
     setIssuedAt(new Date().toISOString().slice(0, 10));
     setExpiresAt(
       doc.expiresAt
@@ -200,48 +231,68 @@ export function ModelSetupModal({
     );
     setSelectedFile(null);
     setFeedbackMessage(null);
+    setErrorMessage(null);
   };
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const file = e.target.files?.[0] ?? null;
+    setSelectedFile(file);
     if (file) {
-      setSelectedFile({ name: file.name, size: file.size });
+      setErrorMessage(null);
     }
   };
 
-  const handleQuickCsdRefresh = async () => {
-    setIsSyncingCsd(true);
-    setFeedbackMessage(null);
-    try {
-      const summary = await refreshCsd();
-      onComplianceUpdated?.(summary);
-      setFeedbackMessage('CSD report synced fresh in Convex Storage (0d old).');
-      if (editingDoc?.type === 'csd') setEditingDoc(null);
-    } finally {
-      setIsSyncingCsd(false);
+  const handleOpenCsdUpload = () => {
+    const csd = reactiveCompliance.docs.find((d) => d.type === 'csd');
+    if (csd) {
+      beginEdit(csd);
     }
   };
 
   const handleUploadSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!editingDoc) return;
+
+    const cleanRef = referenceNumber.trim();
+    if (cleanRef.length < 2) {
+      setErrorMessage('Enter the certificate or MAAA reference number.');
+      return;
+    }
+
+    if (!selectedFile) {
+      setErrorMessage(
+        'Select the actual PDF or certified image file to upload into Convex Storage.'
+      );
+      return;
+    }
+
     setIsSubmitting(true);
     setFeedbackMessage(null);
+    setErrorMessage(null);
 
     try {
       const meta = DOC_META[editingDoc.type];
       const summary = await uploadCompliance({
         type: editingDoc.type,
-        referenceNumber: referenceNumber.trim() || editingDoc.referenceNumber,
-        issuedAt,
-        expiresAt: meta.needsExpiry ? expiresAt : null,
-        fileName:
-          selectedFile?.name || `${editingDoc.type.toUpperCase()}_${issuedAt}.pdf`,
-        fileSizeBytes: selectedFile?.size || 360_000,
+        referenceNumber: cleanRef,
+        issuedAt: new Date(issuedAt).toISOString(),
+        expiresAt: meta.needsExpiry ? new Date(expiresAt).toISOString() : null,
+        fileName: selectedFile.name,
+        fileSizeBytes: selectedFile.size,
+        file: selectedFile,
       });
       onComplianceUpdated?.(summary);
-      setFeedbackMessage(`${meta.displayName} saved to Convex File Storage.`);
+      setFeedbackMessage(
+        `${meta.displayName} binary uploaded to Convex File Storage.`
+      );
       setEditingDoc(null);
+      setSelectedFile(null);
+    } catch (err) {
+      setErrorMessage(
+        err instanceof Error
+          ? err.message
+          : 'Failed to upload compliance binary.'
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -310,7 +361,7 @@ export function ModelSetupModal({
           </button>
         </div>
 
-        {/* Search & Filter Pills */}
+        {/* Search & Filter Tabs */}
         <div className="px-6 pt-4 pb-3 space-y-3 border-b border-white/[0.06]">
           <div className="flex items-center gap-2.5 px-3.5 h-10 rounded-xl bg-[#0C0C0D] border border-white/[0.08]">
             <Search className="size-4 text-zinc-500 shrink-0" />
@@ -324,12 +375,11 @@ export function ModelSetupModal({
             />
             <button
               type="button"
-              onClick={handleQuickCsdRefresh}
-              disabled={isSyncingCsd}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/[0.06] hover:bg-white/[0.1] border border-white/[0.08] text-[11px] font-medium text-zinc-200 cursor-pointer shrink-0"
+              onClick={handleOpenCsdUpload}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] border border-white/[0.08] text-[11px] font-medium text-zinc-200 cursor-pointer shrink-0"
             >
-              <RefreshCw className={`size-3 ${isSyncingCsd ? 'animate-spin' : ''}`} />
-              <span>{isSyncingCsd ? 'Syncing...' : 'Sync CSD'}</span>
+              <RefreshCw className="size-3" />
+              <span>Upload CSD PDF</span>
             </button>
           </div>
 
@@ -339,7 +389,7 @@ export function ModelSetupModal({
                 key={f.id}
                 type="button"
                 onClick={() => setFilterTab(f.id)}
-                className={`px-3 py-1 rounded-full text-[11px] font-medium transition-colors cursor-pointer border ${
+                className={`px-3 py-1 rounded-lg text-[11px] font-medium transition-colors cursor-pointer border ${
                   filterTab === f.id
                     ? 'bg-zinc-100 text-zinc-950 border-zinc-100'
                     : 'bg-white/[0.04] text-zinc-400 hover:text-zinc-200 border-white/[0.06]'
@@ -351,7 +401,6 @@ export function ModelSetupModal({
           </div>
         </div>
 
-        {/* Feedback Banner */}
         {feedbackMessage && (
           <div className="mx-6 mt-3 px-3.5 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-2 text-xs text-emerald-300">
             <CheckCircle2 className="size-3.5 shrink-0" />
@@ -359,7 +408,14 @@ export function ModelSetupModal({
           </div>
         )}
 
-        {/* 2-Column Clean Row Layout (No Boxy Cards) */}
+        {errorMessage && (
+          <div className="mx-6 mt-3 px-3.5 py-2 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center gap-2 text-xs text-rose-300">
+            <AlertCircle className="size-3.5 shrink-0" />
+            <span>{errorMessage}</span>
+          </div>
+        )}
+
+        {/* 2-Column Clean Row Layout */}
         <div className="px-6 py-4 grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 max-h-[52vh] overflow-y-auto">
           {filteredDocs.length === 0 ? (
             <div className="col-span-full py-8 text-center text-xs text-zinc-500">
@@ -369,7 +425,10 @@ export function ModelSetupModal({
             filteredDocs.map((doc) => {
               const meta = DOC_META[doc.type];
               const Icon = meta.icon;
-              const needsAction = doc.status === 'expired' || doc.status === 'missing' || doc.status === 'warning';
+              const needsAction =
+                doc.status === 'expired' ||
+                doc.status === 'missing' ||
+                doc.status === 'warning';
 
               return (
                 <div
@@ -403,7 +462,7 @@ export function ModelSetupModal({
                   <button
                     type="button"
                     onClick={() => beginEdit(doc)}
-                    className={`px-3 py-1 rounded-full text-[11px] font-medium transition-colors cursor-pointer shrink-0 border ${
+                    className={`px-3 py-1 rounded-lg text-[11px] font-medium transition-colors cursor-pointer shrink-0 border ${
                       needsAction
                         ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-100 border-white/15'
                         : 'bg-white/[0.04] hover:bg-white/[0.08] text-zinc-400 border-white/[0.06]'
@@ -413,7 +472,7 @@ export function ModelSetupModal({
                       ? 'Upload'
                       : doc.status === 'warning'
                         ? 'Renew'
-                        : 'Valid'}
+                        : 'Replace'}
                   </button>
                 </div>
               );
@@ -421,7 +480,7 @@ export function ModelSetupModal({
           )}
         </div>
 
-        {/* Inline Upload Drawer when a row is clicked */}
+        {/* Inline Binary Upload Drawer */}
         <AnimatePresence>
           {editingDoc && (
             <motion.form
@@ -434,11 +493,14 @@ export function ModelSetupModal({
             >
               <div className="flex items-center justify-between">
                 <span className="text-xs font-semibold text-zinc-200">
-                  Update {DOC_META[editingDoc.type].displayName}
+                  Upload {DOC_META[editingDoc.type].displayName}
                 </span>
                 <button
                   type="button"
-                  onClick={() => setEditingDoc(null)}
+                  onClick={() => {
+                    setEditingDoc(null);
+                    setErrorMessage(null);
+                  }}
                   className="text-[11px] text-zinc-500 hover:text-zinc-300 bg-transparent border-none cursor-pointer"
                 >
                   Cancel
@@ -474,9 +536,9 @@ export function ModelSetupModal({
                   />
                 ) : (
                   <label className="flex items-center justify-center gap-1.5 rounded-lg bg-[#141416] border border-dashed border-white/15 px-2.5 py-1.5 text-[11px] text-zinc-300 cursor-pointer hover:border-white/30">
-                    <UploadCloud className="size-3.5 text-zinc-400" />
+                    <UploadCloud className="size-3.5 text-zinc-400 shrink-0" />
                     <span className="truncate">
-                      {selectedFile ? selectedFile.name : 'Choose PDF'}
+                      {selectedFile ? selectedFile.name : 'Choose PDF / Scan *'}
                     </span>
                     <input
                       type="file"
@@ -490,9 +552,13 @@ export function ModelSetupModal({
 
               <div className="flex items-center justify-between gap-3">
                 {DOC_META[editingDoc.type].needsExpiry ? (
-                  <label className="inline-flex items-center gap-1.5 text-[11px] text-zinc-400 hover:text-zinc-200 cursor-pointer">
-                    <UploadCloud className="size-3.5" />
-                    <span>{selectedFile ? selectedFile.name : 'Attach PDF certificate'}</span>
+                  <label className="inline-flex items-center gap-1.5 text-[11px] text-zinc-300 hover:text-white cursor-pointer">
+                    <UploadCloud className="size-3.5 shrink-0" />
+                    <span className="truncate max-w-[260px]">
+                      {selectedFile
+                        ? `${selectedFile.name} (${Math.round(selectedFile.size / 1024)} KB)`
+                        : 'Attach PDF / certified scan *'}
+                    </span>
                     <input
                       type="file"
                       accept=".pdf,.png,.jpg,.jpeg"
@@ -510,8 +576,8 @@ export function ModelSetupModal({
 
                 <button
                   type="submit"
-                  disabled={isSubmitting}
-                  className="px-4 py-1.5 rounded-full bg-zinc-100 hover:bg-white text-zinc-950 text-xs font-semibold border-none cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                  disabled={isSubmitting || !selectedFile}
+                  className="px-4 py-1.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 text-xs font-semibold border-none cursor-pointer flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   {isSubmitting && <Loader2 className="size-3 animate-spin" />}
                   <span>Save to Vault</span>

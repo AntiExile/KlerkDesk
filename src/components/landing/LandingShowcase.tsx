@@ -82,9 +82,8 @@ export function LandingShowcase() {
           <span className="truncate">klerkdesk.mundusmk.co.za/desk</span>
         </div>
 
-        <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-400/20 text-[11px] text-emerald-300 shrink-0">
-          <span className="size-1.5 rounded-full bg-emerald-400" />
-          Approval Shield Active
+        <span className="hidden sm:inline text-[11px] font-medium text-zinc-500 shrink-0">
+          Approval Shield
         </span>
       </div>
 

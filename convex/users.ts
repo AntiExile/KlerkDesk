@@ -1,13 +1,22 @@
-import { v } from 'convex/values';
 import { getAuthUserId } from '@convex-dev/auth/server';
+import { v } from 'convex/values';
 import { components } from './_generated/api';
 import type { Id } from './_generated/dataModel';
 import {
   internalMutation,
+  internalQuery,
   mutation,
   query,
   type MutationCtx,
 } from './_generated/server';
+import {
+  assertNoPortalPasswordField,
+  DEMO_USERNAME,
+  maskSarsTcsPin,
+  normalizeZaPhone,
+  requireUserId,
+} from './authHelpers';
+import { DirectorValidator, PlanTierValidator } from './schema';
 
 const AuthMethodValidator = v.union(
   v.object({ name: v.literal('usernamePassword'), profile: v.object({}) }),
@@ -23,17 +32,71 @@ function daysFromNowIso(days: number): string {
 }
 
 /**
- * Seeds starter compliance docs, active municipal tenders, BoQ lines, and an
- * onboarding assistant message scoped to `userId` so newly registered contractors
- * and demo sessions immediately see KlerkDesk in action.
+ * Isolated demo sandbox seeder strictly restricted to `demo@mundusmk.co.za`.
+ * Real contractor accounts start cleanly with empty Compliance Vault, Tender Threads,
+ * and Contractor Profile until they upload or scan live data.
  */
 export async function seedDemoWorkspaceForUser(
   ctx: MutationCtx,
   userId: Id<'users'>
 ): Promise<void> {
+  const existingProfile = await ctx.db
+    .query('contractorProfiles')
+    .withIndex('by_userId', (q) => q.eq('userId', userId))
+    .first();
+
+  if (!existingProfile) {
+    const demoDirectors = [
+      {
+        fullName: 'Willem Johannes van der Merwe',
+        idNumber: '7804125184089',
+        isOrganOfStateEmployee: false,
+        linkedCsdEnterprises: [
+          {
+            enterpriseName: 'Karoo Civil & Infrastructure (Pty) Ltd',
+            csdNumber: 'MAAA0948215',
+            status: 'Active',
+          },
+        ],
+      },
+    ];
+    await ctx.db.insert('contractorProfiles', {
+      userId,
+      companyName: 'Karoo Civil & Infrastructure (Pty) Ltd',
+      registrationNumber: '2018/419022/07',
+      csdNumber: 'MAAA0948215',
+      taxRefNumber: '9482014829',
+      sarsTcsPin: maskSarsTcsPin('TCS-8841209341'),
+      cidbGrade: '6CE PE',
+      bbbeeLevel: 'Level 1 (135% Procurement Recognition)',
+      preferredRegions: ['George', 'Oudtshoorn', 'Mossel Bay', 'Cape Town'],
+      sectors: ['civil_roads', 'building_construction'],
+      whatsappPhone: '+27825550148',
+      planTier: 'starter',
+      directors: demoDirectors,
+      updatedAt: new Date().toISOString(),
+    });
+    await ctx.db.patch(userId, {
+      companyName: 'Karoo Civil & Infrastructure (Pty) Ltd',
+      registrationNumber: '2018/419022/07',
+      csdMaaaNumber: 'MAAA0948215',
+      taxRefNumber: '9482014829',
+      sarsTcsPin: maskSarsTcsPin('TCS-8841209341'),
+      bbbeeLevel: 'Level 1 (135% Procurement Recognition)',
+      cidbGrade: '6CE PE',
+      preferredRegions: ['George', 'Oudtshoorn', 'Mossel Bay', 'Cape Town'],
+      municipalRegions: ['George', 'Oudtshoorn', 'Mossel Bay', 'Cape Town'],
+      sectors: ['civil_roads', 'building_construction'],
+      whatsappPhone: '+27825550148',
+      whatsappNumber: '+27825550148',
+      planTier: 'starter',
+      directors: demoDirectors,
+    });
+  }
+
   const existingDoc = await ctx.db
     .query('complianceDocs')
-    .withIndex('by_user_id', (q) => q.eq('userId', userId))
+    .withIndex('by_userId', (q) => q.eq('userId', userId))
     .first();
 
   if (!existingDoc) {
@@ -60,7 +123,7 @@ export async function seedDemoWorkspaceForUser(
         docType: 'tax_pin' as const,
         title: 'SARS Tax Compliance Status (TCS) PIN',
         shortLabel: 'Tax PIN',
-        referenceNumber: 'TCS-8841209341',
+        referenceNumber: 'TCS-••••9341',
         fileName: 'SARS_Tax_PIN_2026.pdf',
         fileSizeBytes: 219_400,
         issuedAt: daysAgoIso(180),
@@ -148,7 +211,7 @@ export async function seedDemoWorkspaceForUser(
 
   const existingTender = await ctx.db
     .query('tenderMatches')
-    .withIndex('by_user_id', (q) => q.eq('userId', userId))
+    .withIndex('by_userId', (q) => q.eq('userId', userId))
     .first();
 
   if (!existingTender) {
@@ -169,6 +232,7 @@ export async function seedDemoWorkspaceForUser(
         status: 'staging' as const,
         portalUrl:
           'https://www.etenders.gov.za/Home/opportunities?id=ET-2026-WC-0842',
+        submissionChannel: 'etenders_esubmission' as const,
         complianceReady: false,
         complianceBlocks: [
           'CSD Report exceeds 7-day freshness rule',
@@ -194,6 +258,7 @@ export async function seedDemoWorkspaceForUser(
         status: 'matched' as const,
         portalUrl:
           'https://www.etenders.gov.za/Home/opportunities?id=ET-2026-WC-0911',
+        submissionChannel: 'etenders_esubmission' as const,
         complianceReady: false,
         complianceBlocks: [
           'CSD Report exceeds 7-day freshness rule',
@@ -201,56 +266,6 @@ export async function seedDemoWorkspaceForUser(
         ],
         summary:
           'Supply, trenching, and hydrostatic testing of 350mm uPVC Class 16 bulk water mains with concrete valve chambers and telemetry plinths.',
-        sbdFormsRequired: ['SBD 1', 'SBD 4', 'SBD 6.1'],
-      },
-      {
-        tenderId: 'ET-2026-WC-1044',
-        tenderNumber: 'MSB/TD/088/2026',
-        title:
-          'Mossel Bay Kwanonqaba Stormwater Attenuation & Concrete Lined Channels',
-        municipality: 'Mossel Bay Municipality',
-        region: 'Mossel Bay',
-        cidbGrade: '4CE',
-        closingDate: daysFromNowIso(24),
-        briefingDate: null,
-        briefingCompulsory: false,
-        estimatedValueZar: 4_960_000,
-        matchScore: 89,
-        status: 'matched' as const,
-        portalUrl:
-          'https://www.etenders.gov.za/Home/opportunities?id=ET-2026-WC-1044',
-        complianceReady: false,
-        complianceBlocks: [
-          'CSD Report exceeds 7-day freshness rule',
-          'CIPC CoR 14.3 exceeds 90-day certification rule',
-        ],
-        summary:
-          'Gabion erosion protection, reinforced concrete trapezoidal drainage channels, and inlet headwalls.',
-        sbdFormsRequired: ['SBD 1', 'SBD 4', 'SBD 6.1'],
-      },
-      {
-        tenderId: 'ET-2026-CPT-2201',
-        tenderNumber: 'COCT/221Q/2025-26',
-        title:
-          'City of Cape Town Area South Civil Concrete Plinths & Cable Ducting',
-        municipality: 'City of Cape Town',
-        region: 'Cape Town',
-        cidbGrade: '6CE',
-        closingDate: daysFromNowIso(29),
-        briefingDate: daysFromNowIso(9),
-        briefingCompulsory: false,
-        estimatedValueZar: 19_200_000,
-        matchScore: 84,
-        status: 'matched' as const,
-        portalUrl:
-          'https://www.etenders.gov.za/Home/opportunities?id=ET-2026-CPT-2201',
-        complianceReady: false,
-        complianceBlocks: [
-          'CSD Report exceeds 7-day freshness rule',
-          'CIPC CoR 14.3 exceeds 90-day certification rule',
-        ],
-        summary:
-          '36-month term tender for substation civil earthworks, security boundary walls, and HDPE electrical sleeve trenches.',
         sbdFormsRequired: ['SBD 1', 'SBD 4', 'SBD 6.1'],
       },
     ];
@@ -296,38 +311,6 @@ export async function seedDemoWorkspaceForUser(
         rateZar: 315,
         amountZar: 5_827_500,
       },
-      {
-        itemId: 'boq-4',
-        itemCode: '5104',
-        section: 'Section 5: Stormwater Culverts',
-        description:
-          'Supply & lay 900x600mm precast concrete box culverts incl. bedding',
-        unit: 'm',
-        quantity: 420,
-        rateZar: 4_850,
-        amountZar: 2_037_000,
-      },
-      {
-        itemId: 'boq-5',
-        itemCode: '6109',
-        section: 'Section 6: Kerbing & Ancillary',
-        description: 'Precast concrete Fig 3 barrier kerbing & storm catchpits',
-        unit: 'm',
-        quantity: 1_450,
-        rateZar: 410,
-        amountZar: 594_500,
-      },
-      {
-        itemId: 'boq-6',
-        itemCode: '9001',
-        section: 'Section 9: Provisional Sums',
-        description:
-          'Community Liaison Officer (CLO) & SMME local labour allowance',
-        unit: 'Prov Sum',
-        quantity: 1,
-        rateZar: 450_000,
-        amountZar: 450_000,
-      },
     ];
 
     for (const item of starterBoq) {
@@ -337,24 +320,6 @@ export async function seedDemoWorkspaceForUser(
         ...item,
       });
     }
-  }
-
-  const existingMessage = await ctx.db
-    .query('messages')
-    .withIndex('by_user_id', (q) => q.eq('userId', userId))
-    .first();
-
-  if (!existingMessage) {
-    await ctx.db.insert('messages', {
-      userId,
-      bidId: 'ET-2026-WC-0842',
-      role: 'assistant',
-      content:
-        'Welcome to **KlerkDesk**. Morning OCDS & municipal scans matched **T/GEO/042/2026** (George Municipality, R14.85M). Refresh your CSD (7-day rule) and CIPC (90-day rule) in the Compliance Vault before approving final submission.',
-      contentType: 'markdown',
-      modelUsed: 'openrouter/free',
-      createdAt: new Date().toISOString(),
-    });
   }
 }
 
@@ -366,19 +331,42 @@ export const createUser = internalMutation({
   handler: async (ctx) => {
     const now = new Date().toISOString();
     const userId = await ctx.db.insert('users', {
-      companyName: 'Karoo Civil & Infrastructure (Pty) Ltd',
-      registrationNumber: '2018/419022/07',
-      csdMaaaNumber: 'MAAA0948215',
-      taxPinNumber: 'TCS-8841209341',
-      bbbeeLevel: 'Level 1 (135% Procurement Recognition)',
-      cidbGrade: '6CE PE',
-      municipalRegions: ['George', 'Oudtshoorn', 'Mossel Bay', 'Cape Town'],
-      whatsappNumber: '+27825550148',
+      companyName: '',
+      registrationNumber: '',
+      csdMaaaNumber: '',
+      taxPinNumber: '',
+      taxRefNumber: '',
+      sarsTcsPin: '',
+      bbbeeLevel: '',
+      cidbGrade: '',
+      municipalRegions: [],
+      preferredRegions: [],
+      sectors: [],
+      whatsappNumber: '',
+      whatsappPhone: '',
+      planTier: 'starter',
+      directors: [],
       createdAt: now,
       lastSignInAt: now,
     });
 
-    await seedDemoWorkspaceForUser(ctx, userId);
+    await ctx.db.insert('contractorProfiles', {
+      userId,
+      companyName: '',
+      registrationNumber: '',
+      csdNumber: '',
+      taxRefNumber: '',
+      sarsTcsPin: '',
+      cidbGrade: '',
+      bbbeeLevel: '',
+      preferredRegions: [],
+      sectors: [],
+      whatsappPhone: '',
+      planTier: 'starter',
+      directors: [],
+      updatedAt: now,
+    });
+
     return userId;
   },
 });
@@ -393,7 +381,6 @@ export const onSignIn = internalMutation({
     await ctx.db.patch(args.userId, {
       lastSignInAt: new Date().toISOString(),
     });
-    await seedDemoWorkspaceForUser(ctx, args.userId);
     return null;
   },
 });
@@ -402,8 +389,14 @@ export const ensureDemoSeed = mutation({
   args: {},
   returns: v.boolean(),
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return false;
+    const userId = await requireUserId(ctx);
+    const username = await ctx.runQuery(
+      components.authUsername.public.getUsername,
+      { userId }
+    );
+    if (username?.trim().toLowerCase() !== DEMO_USERNAME) {
+      return false;
+    }
     await seedDemoWorkspaceForUser(ctx, userId);
     return true;
   },
@@ -415,30 +408,51 @@ export const currentUser = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
 
-    const [user, username] = await Promise.all([
+    const [user, profile, username] = await Promise.all([
       ctx.db.get('users', userId),
+      ctx.db
+        .query('contractorProfiles')
+        .withIndex('by_userId', (q) => q.eq('userId', userId))
+        .first(),
       ctx.runQuery(components.authUsername.public.getUsername, { userId }),
     ]);
 
     if (!user) return null;
 
+    const isDemo = username?.trim().toLowerCase() === DEMO_USERNAME;
+    const rawPin = profile?.sarsTcsPin || user.sarsTcsPin || user.taxPinNumber || '';
+
     return {
       _id: user._id,
       username: username ?? null,
-      companyName:
-        user.companyName ?? 'Karoo Civil & Infrastructure (Pty) Ltd',
-      registrationNumber: user.registrationNumber ?? '2018/419022/07',
-      csdMaaaNumber: user.csdMaaaNumber ?? 'MAAA0948215',
-      taxPinNumber: user.taxPinNumber ?? 'TCS-8841209341',
-      bbbeeLevel: user.bbbeeLevel ?? 'Level 1 (135% Procurement Recognition)',
-      cidbGrade: user.cidbGrade ?? '6CE PE',
-      municipalRegions: user.municipalRegions ?? [
-        'George',
-        'Oudtshoorn',
-        'Mossel Bay',
-        'Cape Town',
-      ],
-      whatsappNumber: user.whatsappNumber ?? '+27825550148',
+      isDemo,
+      companyName: profile?.companyName ?? user.companyName ?? '',
+      registrationNumber:
+        profile?.registrationNumber ?? user.registrationNumber ?? '',
+      csdMaaaNumber: profile?.csdNumber ?? user.csdMaaaNumber ?? '',
+      csdNumber: profile?.csdNumber ?? user.csdMaaaNumber ?? '',
+      taxRefNumber: profile?.taxRefNumber ?? user.taxRefNumber ?? '',
+      taxPinNumber: maskSarsTcsPin(rawPin),
+      sarsTcsPin: maskSarsTcsPin(rawPin),
+      bbbeeLevel: profile?.bbbeeLevel ?? user.bbbeeLevel ?? '',
+      cidbGrade: profile?.cidbGrade ?? user.cidbGrade ?? '',
+      municipalRegions:
+        user.municipalRegions ?? profile?.preferredRegions ?? [],
+      preferredRegions:
+        profile?.preferredRegions ?? user.preferredRegions ?? [],
+      sectors: profile?.sectors ?? user.sectors ?? [],
+      whatsappNumber:
+        profile?.whatsappPhone ||
+        user.whatsappPhone ||
+        user.whatsappNumber ||
+        '',
+      whatsappPhone:
+        profile?.whatsappPhone ||
+        user.whatsappPhone ||
+        user.whatsappNumber ||
+        '',
+      planTier: profile?.planTier ?? user.planTier ?? 'starter',
+      directors: profile?.directors ?? user.directors ?? [],
     };
   },
 });
@@ -448,33 +462,231 @@ export const updateProfile = mutation({
     companyName: v.optional(v.string()),
     registrationNumber: v.optional(v.string()),
     csdMaaaNumber: v.optional(v.string()),
+    csdNumber: v.optional(v.string()),
+    taxRefNumber: v.optional(v.string()),
     taxPinNumber: v.optional(v.string()),
+    sarsTcsPin: v.optional(v.string()),
     bbbeeLevel: v.optional(v.string()),
     cidbGrade: v.optional(v.string()),
     municipalRegions: v.optional(v.array(v.string())),
+    preferredRegions: v.optional(v.array(v.string())),
+    sectors: v.optional(v.array(v.string())),
     whatsappNumber: v.optional(v.string()),
+    whatsappPhone: v.optional(v.string()),
+    planTier: v.optional(PlanTierValidator),
+    directors: v.optional(v.array(DirectorValidator)),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
-      throw new Error('Unauthorized: please sign in to update profile');
+    const userId = await requireUserId(ctx);
+    assertNoPortalPasswordField(args as Record<string, unknown>);
+
+    const [user, existingProfile] = await Promise.all([
+      ctx.db.get('users', userId),
+      ctx.db
+        .query('contractorProfiles')
+        .withIndex('by_userId', (q) => q.eq('userId', userId))
+        .first(),
+    ]);
+
+    const csd = args.csdNumber ?? args.csdMaaaNumber;
+    const rawPhone = args.whatsappPhone ?? args.whatsappNumber;
+    const normalizedPhone =
+      rawPhone !== undefined ? normalizeZaPhone(rawPhone) : undefined;
+    const rawPin = args.sarsTcsPin ?? args.taxPinNumber;
+    const maskedPin = rawPin !== undefined ? maskSarsTcsPin(rawPin) : undefined;
+
+    const cleanPreferredRegions = args.preferredRegions
+      ? args.preferredRegions
+      : args.municipalRegions
+        ? args.municipalRegions.filter((r) => !r.startsWith('__klerk_'))
+        : undefined;
+
+    const userPatch: Record<string, unknown> = {};
+    if (args.companyName !== undefined) userPatch.companyName = args.companyName.trim();
+    if (args.registrationNumber !== undefined) {
+      userPatch.registrationNumber = args.registrationNumber.trim();
+    }
+    if (csd !== undefined) userPatch.csdMaaaNumber = csd.trim().toUpperCase();
+    if (args.taxRefNumber !== undefined) {
+      userPatch.taxRefNumber = args.taxRefNumber.trim();
+    }
+    if (maskedPin !== undefined) {
+      userPatch.taxPinNumber = maskedPin;
+      userPatch.sarsTcsPin = maskedPin;
+    }
+    if (args.bbbeeLevel !== undefined) userPatch.bbbeeLevel = args.bbbeeLevel.trim();
+    if (args.cidbGrade !== undefined) userPatch.cidbGrade = args.cidbGrade.trim();
+    if (args.municipalRegions !== undefined) {
+      userPatch.municipalRegions = args.municipalRegions;
+    }
+    if (cleanPreferredRegions !== undefined) {
+      userPatch.preferredRegions = cleanPreferredRegions;
+    }
+    if (args.sectors !== undefined) userPatch.sectors = args.sectors;
+    if (normalizedPhone !== undefined) {
+      userPatch.whatsappNumber = normalizedPhone;
+      userPatch.whatsappPhone = normalizedPhone;
+    }
+    if (args.planTier !== undefined) userPatch.planTier = args.planTier;
+    if (args.directors !== undefined) userPatch.directors = args.directors;
+
+    if (Object.keys(userPatch).length > 0) {
+      await ctx.db.patch(userId, userPatch);
     }
 
-    const patch: Record<string, unknown> = {};
-    if (args.companyName !== undefined) patch.companyName = args.companyName;
-    if (args.registrationNumber !== undefined)
-      patch.registrationNumber = args.registrationNumber;
-    if (args.csdMaaaNumber !== undefined)
-      patch.csdMaaaNumber = args.csdMaaaNumber;
-    if (args.taxPinNumber !== undefined) patch.taxPinNumber = args.taxPinNumber;
-    if (args.bbbeeLevel !== undefined) patch.bbbeeLevel = args.bbbeeLevel;
-    if (args.cidbGrade !== undefined) patch.cidbGrade = args.cidbGrade;
-    if (args.municipalRegions !== undefined)
-      patch.municipalRegions = args.municipalRegions;
-    if (args.whatsappNumber !== undefined)
-      patch.whatsappNumber = args.whatsappNumber;
+    const now = new Date().toISOString();
+    const nextProfile = {
+      userId,
+      companyName:
+        (userPatch.companyName as string | undefined) ??
+        existingProfile?.companyName ??
+        user?.companyName ??
+        '',
+      registrationNumber:
+        (userPatch.registrationNumber as string | undefined) ??
+        existingProfile?.registrationNumber ??
+        user?.registrationNumber ??
+        '',
+      csdNumber:
+        (userPatch.csdMaaaNumber as string | undefined) ??
+        existingProfile?.csdNumber ??
+        user?.csdMaaaNumber ??
+        '',
+      taxRefNumber:
+        (userPatch.taxRefNumber as string | undefined) ??
+        existingProfile?.taxRefNumber ??
+        user?.taxRefNumber ??
+        '',
+      sarsTcsPin:
+        (userPatch.sarsTcsPin as string | undefined) ??
+        existingProfile?.sarsTcsPin ??
+        user?.sarsTcsPin ??
+        '',
+      cidbGrade:
+        (userPatch.cidbGrade as string | undefined) ??
+        existingProfile?.cidbGrade ??
+        user?.cidbGrade ??
+        '',
+      bbbeeLevel:
+        (userPatch.bbbeeLevel as string | undefined) ??
+        existingProfile?.bbbeeLevel ??
+        user?.bbbeeLevel ??
+        '',
+      preferredRegions:
+        (userPatch.preferredRegions as string[] | undefined) ??
+        existingProfile?.preferredRegions ??
+        user?.preferredRegions ??
+        [],
+      sectors:
+        (userPatch.sectors as string[] | undefined) ??
+        existingProfile?.sectors ??
+        user?.sectors ??
+        [],
+      whatsappPhone:
+        (userPatch.whatsappPhone as string | undefined) ??
+        existingProfile?.whatsappPhone ??
+        user?.whatsappPhone ??
+        '',
+      planTier:
+        (userPatch.planTier as 'starter' | 'pro' | 'ops' | undefined) ??
+        existingProfile?.planTier ??
+        user?.planTier ??
+        'starter',
+      directors:
+        (userPatch.directors as typeof existingProfile extends null | undefined
+          ? never
+          : NonNullable<typeof existingProfile>['directors']) ??
+        existingProfile?.directors ??
+        user?.directors ??
+        [],
+      updatedAt: now,
+    };
 
-    await ctx.db.patch(userId, patch);
+    if (existingProfile) {
+      await ctx.db.patch(existingProfile._id, nextProfile);
+    } else {
+      await ctx.db.insert('contractorProfiles', nextProfile);
+    }
+
     return await ctx.db.get('users', userId);
+  },
+});
+
+export const getContractorProfileInternal = internalQuery({
+  args: { userId: v.id('users') },
+  handler: async (ctx, args) => {
+    const [user, profile] = await Promise.all([
+      ctx.db.get('users', args.userId),
+      ctx.db
+        .query('contractorProfiles')
+        .withIndex('by_userId', (q) => q.eq('userId', args.userId))
+        .first(),
+    ]);
+    if (!user) return null;
+    return {
+      userId: args.userId,
+      companyName: profile?.companyName ?? user.companyName ?? '',
+      registrationNumber:
+        profile?.registrationNumber ?? user.registrationNumber ?? '',
+      csdNumber: profile?.csdNumber ?? user.csdMaaaNumber ?? '',
+      taxRefNumber: profile?.taxRefNumber ?? user.taxRefNumber ?? '',
+      sarsTcsPin: profile?.sarsTcsPin ?? user.sarsTcsPin ?? '',
+      cidbGrade: profile?.cidbGrade ?? user.cidbGrade ?? '',
+      bbbeeLevel: profile?.bbbeeLevel ?? user.bbbeeLevel ?? '',
+      preferredRegions:
+        profile?.preferredRegions ?? user.preferredRegions ?? [],
+      sectors: profile?.sectors ?? user.sectors ?? [],
+      whatsappPhone:
+        profile?.whatsappPhone ||
+        user.whatsappPhone ||
+        user.whatsappNumber ||
+        '',
+      planTier: profile?.planTier ?? user.planTier ?? 'starter',
+      directors: profile?.directors ?? user.directors ?? [],
+    };
+  },
+});
+
+export const findUserByWhatsappPhoneInternal = internalQuery({
+  args: { whatsappPhone: v.string() },
+  handler: async (ctx, args) => {
+    const normalized = normalizeZaPhone(args.whatsappPhone);
+    if (!normalized) return null;
+
+    const profileMatch = await ctx.db
+      .query('contractorProfiles')
+      .withIndex('by_whatsappPhone', (q) => q.eq('whatsappPhone', normalized))
+      .first();
+
+    if (profileMatch) {
+      return {
+        userId: profileMatch.userId,
+        companyName: profileMatch.companyName,
+        whatsappPhone: profileMatch.whatsappPhone,
+        cidbGrade: profileMatch.cidbGrade,
+        planTier: profileMatch.planTier,
+      };
+    }
+
+    const userMatch = await ctx.db
+      .query('users')
+      .withIndex('by_whatsappPhone', (q) => q.eq('whatsappPhone', normalized))
+      .first();
+
+    if (!userMatch) return null;
+    return {
+      userId: userMatch._id,
+      companyName: userMatch.companyName ?? '',
+      whatsappPhone: userMatch.whatsappPhone ?? normalized,
+      cidbGrade: userMatch.cidbGrade ?? '',
+      planTier: userMatch.planTier ?? 'starter',
+    };
+  },
+});
+
+export const listActiveContractorProfilesInternal = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db.query('contractorProfiles').take(200);
   },
 });

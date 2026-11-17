@@ -13,9 +13,13 @@ import {
   Sparkles,
 } from 'lucide-react';
 
+import { getShortTenderLabel, formatSpacedRand } from '@/lib/format';
+import type { TenderMatch } from '@/types';
+
 interface CommandPaletteProps {
   isOpen: boolean;
   onClose: () => void;
+  activeTender?: TenderMatch;
   onOpenComplianceUploader?: () => void;
   onOpenSettings?: () => void;
   onAskPrompt?: (prompt: string) => void;
@@ -30,52 +34,59 @@ interface QuickAction {
   shortcut?: string;
 }
 
-const QUICK_ACTIONS: QuickAction[] = [
-  {
-    id: 'upload-compliance',
-    title: 'Open Compliance Vault',
-    description: 'Review or upload CSD (7d), CIPC/ID (90d), Tax PIN, COIDA & B-BBEE',
-    icon: <ShieldCheck className="size-4" />,
-    shortcut: 'A',
-  },
-  {
-    id: 'open-bid',
-    title: 'Inspect George — York St Upgrade',
-    description: 'Open R 14 850 000 staged bid, BoQ pricing & Approval Shield',
-    icon: <FileUp className="size-4" />,
-    shortcut: 'B',
-  },
-  {
-    id: 'live-sandbox',
-    title: 'Toggle boat.dev Live Browser',
-    description: 'Slide open the 10-minute Ubuntu desktop iframe & Stagehand trace',
-    icon: <MonitorPlay className="size-4" />,
-  },
-  {
-    id: 'audit-sbd',
-    title: 'Run Full PDF Audit (Claude Sonnet 5.5)',
-    description: 'Check mandatory SBD 1/4/6.1 returnables and Compliance Vault blocks',
-    icon: <Scale className="size-4" />,
-    shortcut: 'C',
-  },
-  {
-    id: 'ask-compliance',
-    title: 'Ask KlerkDesk About Today’s Scan',
-    description: 'Query DeepSeek v4 Flash on municipal deadlines and compliance flags',
-    icon: <Sparkles className="size-4" />,
-  },
-  {
-    id: 'settings',
-    title: 'Contractor & Region Settings',
-    description: 'Configure CIDB grade, municipal regions, WhatsApp & $15/mo OpenRouter cap',
-    icon: <Settings className="size-4" />,
-    shortcut: '⌘,',
-  },
-];
+function buildQuickActions(activeTender?: TenderMatch): QuickAction[] {
+  return [
+    {
+      id: 'upload-compliance',
+      title: 'Open Compliance Vault',
+      description: 'Review or upload CSD (7d), CIPC/ID (90d), Tax PIN, COIDA & B-BBEE',
+      icon: <ShieldCheck className="size-4" />,
+      shortcut: 'A',
+    },
+    {
+      id: 'open-bid',
+      title: activeTender
+        ? `Inspect ${getShortTenderLabel(activeTender)}`
+        : 'Open Contractor Onboarding',
+      description: activeTender
+        ? `Open ${formatSpacedRand(activeTender.estimatedValueZar)} bid, BoQ pricing & Approval Shield`
+        : 'Configure company registration, MAAA number & procurement sectors',
+      icon: <FileUp className="size-4" />,
+      shortcut: 'B',
+    },
+    {
+      id: 'live-sandbox',
+      title: 'Toggle Live Browser Sandbox',
+      description: 'Slide open the managed Chromium/Ubuntu desktop & Stagehand trace',
+      icon: <MonitorPlay className="size-4" />,
+    },
+    {
+      id: 'audit-sbd',
+      title: 'Run Full PDF Audit (Claude Sonnet 5.5)',
+      description: 'Check mandatory SBD 1/4/6.1 returnables and Compliance Vault blocks',
+      icon: <Scale className="size-4" />,
+      shortcut: 'C',
+    },
+    {
+      id: 'ask-compliance',
+      title: 'Ask KlerkDesk About Active Bids',
+      description: 'Query DeepSeek v4 Flash on municipal deadlines and compliance flags',
+      icon: <Sparkles className="size-4" />,
+    },
+    {
+      id: 'settings',
+      title: 'Contractor & Region Settings',
+      description: 'Configure CIDB grade, directors, WhatsApp & $15/mo OpenRouter cap',
+      icon: <Settings className="size-4" />,
+      shortcut: '⌘,',
+    },
+  ];
+}
 
 export function CommandPalette({
   isOpen,
   onClose,
+  activeTender,
   onOpenComplianceUploader,
   onOpenSettings,
   onAskPrompt,
@@ -86,7 +97,8 @@ export function CommandPalette({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const filtered = QUICK_ACTIONS.filter(
+  const quickActions = buildQuickActions(activeTender);
+  const filtered = quickActions.filter(
     (action) =>
       action.title.toLowerCase().includes(query.toLowerCase()) ||
       action.description.toLowerCase().includes(query.toLowerCase())
@@ -110,7 +122,11 @@ export function CommandPalette({
     (action: QuickAction) => {
       switch (action.id) {
         case 'open-bid':
-          router.push('/bid/ET-2026-WC-0842');
+          if (activeTender) {
+            router.push(`/bid/${activeTender.id}`);
+          } else {
+            router.push('/onboarding');
+          }
           break;
         case 'upload-compliance':
           onOpenComplianceUploader?.();
@@ -123,18 +139,21 @@ export function CommandPalette({
           break;
         case 'audit-sbd':
           onAskPrompt?.(
-            'Run a full tender PDF audit on ET-2026-WC-0842 and verify SBD 1, SBD 4, SBD 6.1 compliance.'
+            activeTender
+              ? `Run a full tender PDF audit on ${activeTender.tenderNumber} and verify SBD 1, SBD 4, SBD 6.1 compliance.`
+              : 'Audit our active Compliance Vault documents against SBD 1, SBD 4, and SBD 6.1 requirements.'
           );
           break;
         case 'ask-compliance':
           onAskPrompt?.(
-            'Summarize the blocking compliance docs and closing dates from today’s scan.'
+            'Summarize the blocking compliance docs and closing dates from our active tenders.'
           );
           break;
       }
       onClose();
     },
     [
+      activeTender,
       onAskPrompt,
       onClose,
       onOpenComplianceUploader,

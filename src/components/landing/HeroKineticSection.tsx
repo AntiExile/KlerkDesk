@@ -32,6 +32,7 @@ import {
   type ShowcaseScenario,
 } from './showcase-data';
 import { RotatingAutopilotPhrase } from './RotatingAutopilotPhrase';
+import { KlerkMascot, type KlerkMascotMood } from '@/components/KlerkMascot';
 
 interface ExtraChatMessage {
   id: string;
@@ -46,77 +47,9 @@ const SCENARIO_ICONS: Record<string, typeof Bot> = {
   'approval-shield': MessageSquareCheck,
 };
 
-function BlinkingBotVisor() {
-  const prefersReduced = useReducedMotion();
-
-  return (
-    <span
-      aria-hidden="true"
-      className="inline-flex items-center justify-center size-10 sm:size-12 rounded-2xl bg-[#141416] border border-emerald-400/25 shadow-lg shadow-emerald-950/30 align-middle mx-1.5"
-    >
-      <svg
-        viewBox="0 0 36 24"
-        fill="none"
-        className="w-6 h-4 text-emerald-400"
-        xmlns="http://www.w3.org/2000/svg"
-      >
-        <rect
-          x="1.5"
-          y="1.5"
-          width="33"
-          height="21"
-          rx="7"
-          stroke="currentColor"
-          strokeWidth="2"
-          className="text-emerald-400/70"
-        />
-        <motion.rect
-          x="10"
-          y="7.5"
-          width="4"
-          height="9"
-          rx="2"
-          fill="currentColor"
-          animate={
-            prefersReduced
-              ? undefined
-              : { scaleY: [1, 1, 0.12, 1, 1] }
-          }
-          transition={{
-            duration: 3.8,
-            repeat: Infinity,
-            times: [0, 0.44, 0.48, 0.52, 1],
-            ease: 'easeInOut',
-          }}
-          style={{ transformOrigin: '12px 12px' }}
-        />
-        <motion.rect
-          x="22"
-          y="7.5"
-          width="4"
-          height="9"
-          rx="2"
-          fill="currentColor"
-          animate={
-            prefersReduced
-              ? undefined
-              : { scaleY: [1, 1, 0.12, 1, 1] }
-          }
-          transition={{
-            duration: 3.8,
-            repeat: Infinity,
-            times: [0, 0.44, 0.48, 0.52, 1],
-            ease: 'easeInOut',
-          }}
-          style={{ transformOrigin: '24px 12px' }}
-        />
-      </svg>
-    </span>
-  );
-}
-
 export function HeroKineticSection() {
   const prefersReduced = useReducedMotion();
+  const [heroMood, setHeroMood] = useState<KlerkMascotMood>('idle');
   const [activeIndex, setActiveIndex] = useState(0);
   const [autoPlay, setAutoPlay] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -221,49 +154,54 @@ export function HeroKineticSection() {
           className="pointer-events-none absolute inset-x-0 top-0 h-[440px] bg-[radial-gradient(ellipse_at_top,rgba(52,211,153,0.14),transparent_65%)]"
         />
 
-        <div className="relative max-w-4xl mx-auto text-center">
-          {/* Announcement Link Bar (Video 2 inspiration) */}
-          <div className="mb-5 flex justify-center">
-            <Link
-              href="/login?demo=true"
-              className="group inline-flex items-center gap-2 rounded-full bg-[#121215] hover:bg-[#18181C] border border-white/10 px-3 sm:px-4 py-1.5 text-[11px] sm:text-xs text-zinc-300 no-underline transition-colors whitespace-nowrap"
-            >
-              <span>KlerkDesk 14-day contractor pilot is live</span>
-              <span aria-hidden="true" className="text-zinc-600">·</span>
-              <span className="text-emerald-400 font-medium inline-flex items-center gap-1">
-                Launch live demo
-                <ArrowRight className="size-3 transition-transform group-hover:translate-x-0.5" />
-              </span>
-            </Link>
-          </div>
-
-          {/* Layered Kinetic Wordmark (Video 1 & Video 2 inspiration) */}
-          <div className="relative inline-flex items-center justify-center select-none mb-4">
-            <motion.span
+        <div className="relative max-w-4xl mx-auto text-center pt-2">
+          {/* MausBot-Style Mascot Trio + Layered Kinetic Wordmark */}
+          <div className="relative inline-flex flex-col items-center justify-center select-none mb-4">
+            <motion.div
               aria-hidden="true"
               animate={
                 prefersReduced
                   ? undefined
-                  : { y: [0, -6, 0], rotate: [-6, -2, -6] }
+                  : { y: [0, -5, 0], rotate: [-4, 2, -4] }
               }
               transition={{ duration: 5.5, repeat: Infinity, ease: 'easeInOut' }}
-              className="hidden sm:inline-flex absolute -left-16 -top-2 items-center justify-center"
+              className="hidden sm:flex absolute -left-14 top-5 items-center justify-center"
             >
-              <BlinkingBotVisor />
-            </motion.span>
+              <KlerkMascot
+                variant="scout"
+                size={34}
+                mood={heroMood === 'scanning' ? 'scanning' : 'idle'}
+              />
+            </motion.div>
 
-            <motion.span
+            <motion.div
               aria-hidden="true"
               animate={
                 prefersReduced
                   ? undefined
-                  : { y: [0, 6, 0], rotate: [6, 2, 6] }
+                  : { y: [0, 5, 0], rotate: [4, -2, 4] }
               }
               transition={{ duration: 6.2, repeat: Infinity, ease: 'easeInOut' }}
-              className="hidden sm:inline-flex absolute -right-14 -bottom-1 size-9 rounded-lg bg-[#141416] border border-white/10 items-center justify-center text-emerald-300/80 shadow-lg"
+              className="hidden sm:flex absolute -right-12 top-7 items-center justify-center"
             >
-              <ShieldCheck className="size-4" />
-            </motion.span>
+              <KlerkMascot
+                variant="shield"
+                size={30}
+                mood={heroMood === 'approved' ? 'approved' : 'idle'}
+              />
+            </motion.div>
+
+            <motion.div
+              animate={
+                prefersReduced
+                  ? undefined
+                  : { y: [0, -4, 0] }
+              }
+              transition={{ duration: 4.4, repeat: Infinity, ease: 'easeInOut' }}
+              className="mb-1 flex items-center justify-center"
+            >
+              <KlerkMascot variant="chief" size={88} mood={heroMood} />
+            </motion.div>
 
             <div className="relative flex flex-col items-center">
               <motion.span
@@ -316,6 +254,10 @@ export function HeroKineticSection() {
           <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
             <Link
               href="/signup"
+              onMouseEnter={() => setHeroMood('approved')}
+              onMouseLeave={() => setHeroMood('idle')}
+              onFocus={() => setHeroMood('approved')}
+              onBlur={() => setHeroMood('idle')}
               className="inline-flex items-center gap-2 rounded-full bg-white text-black hover:bg-zinc-200 px-6 py-2.5 text-sm font-semibold no-underline transition-colors whitespace-nowrap shrink-0"
             >
               <span>Launch KlerkDesk</span>
@@ -323,6 +265,10 @@ export function HeroKineticSection() {
             </Link>
             <Link
               href="/login?demo=true"
+              onMouseEnter={() => setHeroMood('scanning')}
+              onMouseLeave={() => setHeroMood('idle')}
+              onFocus={() => setHeroMood('scanning')}
+              onBlur={() => setHeroMood('idle')}
               className="inline-flex items-center gap-2 rounded-full bg-[#18181B] hover:bg-[#222227] border border-white/10 text-white px-6 py-2.5 text-sm font-medium no-underline transition-colors whitespace-nowrap shrink-0"
             >
               <span>Live Interactive Demo</span>

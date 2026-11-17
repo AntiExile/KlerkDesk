@@ -1,14 +1,9 @@
 import crypto from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
+import { api } from '@/convex/_generated/api';
+import { getConvexHttpClient } from '@/lib/convex-store';
 import { runTenderAI } from '@/lib/openrouter';
-import {
-  appendConvexMessage,
-  createPendingApproval,
-  getComplianceSummary,
-  getContractorSettings,
-  getTenderMatches,
-} from '@/lib/convex-store';
 
 const MetaWebhookSchema = z.object({
   object: z.string().optional(),
@@ -105,6 +100,37 @@ function verifyWhatsAppSignature(
   return crypto.timingSafeEqual(receivedBuf, expectedBuf);
 }
 
+async function sendMetaWhatsAppMessage(
+  recipientPhone: string,
+  textBody: string
+): Promise<boolean> {
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
+
+  if (!phoneNumberId || !accessToken || !recipientPhone) {
+    return false;
+  }
+
+  const res = await fetch(
+    `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        to: recipientPhone,
+        type: 'text',
+        text: { body: textBody },
+      }),
+      signal: AbortSignal.timeout(10_000),
+    }
+  );
+  return res.ok;
+}
+
 /**
  * Meta WhatsApp Cloud API webhook verification challenge.
  */
@@ -131,8 +157,11 @@ export async function GET(request: NextRequest) {
 }
 
 /**
- * Handles inbound Meta WhatsApp Cloud API messages for tender alerts & contractor Q&A.
- * Enforces X-Hub-Signature-256 verification and the Approval Shield.
+ * Multi-tenant inbound Meta WhatsApp Cloud API handler:
+ * - Strictly verifies `X-Hub-Signature-256` HMAC-SHA256 signature
+ * - Resolves contractor via `contractorProfiles.by_whatsappPhone` (no `'anonymous'`)
+ * - Replies to unlinked senders with onboarding link (`https://klerkdesk.mundusmk.co.za/onboarding`)
+ * - Scopes interactive approvals, AI Q&A, and usage tracking strictly to the matched `userId`
  */
 export async function POST(request: NextRequest) {
   try {
@@ -203,145 +232,112 @@ export async function POST(request: NextRequest) {
       : textBody;
     const sender = inbound.from;
 
-    const [compliance, tenders, settings] = await Promise.all([
-      getComplianceSummary(),
-      getTenderMatches(),
-      getContractorSettings(),
-    ]);
-
-    const topTender = tenders[0];
     const buttonCandidate = (interactiveReplyId || textBody).trim();
-    const buttonMatch = /^(approve|skip)_([A-Za-z0-9-]+)$/i.exec(buttonCandidate);
+    const buttonMatch = /^(approve|skip)_([A-Za-z0-9-]+)$/i.exec(
+      buttonCandidate
+    );
+    const buttonAction = buttonMatch
+      ? (buttonMatch[1].toLowerCase() as 'approve' | 'skip')
+      : undefined;
+    const buttonBidId = buttonMatch ? buttonMatch[2] : undefined;
 
-    let approvalRecordId: string | null = null;
-    let targetBidId = topTender?.id ?? 'ET-2026-WC-0842';
-    let interactiveAction: string | null = null;
+    const internalSecret =
+      process.env.KLERK_INTERNAL_SECRET ||
+      process.env.WHATSAPP_APP_SECRET ||
+      '';
+
+    const convex = getConvexHttpClient();
+    const resolved = await convex.action(api.chat.resolveWhatsappSenderAction, {
+      internalSecret,
+      senderPhone: sender,
+      inboundContent: inboundContent || '(empty)',
+      buttonBidId,
+      buttonAction,
+    });
+
+    if (!resolved.linked) {
+      const onboardingReply = `Your WhatsApp number is not linked to a KlerkDesk contractor profile yet. Sign in and add your WhatsApp number at ${resolved.onboardingUrl} to receive tender alerts and Approval Shield requests.`;
+      const dispatchedToMeta = await sendMetaWhatsAppMessage(
+        sender,
+        onboardingReply
+      );
+
+      return NextResponse.json({
+        status: 'unlinked_sender',
+        sender,
+        onboardingUrl: resolved.onboardingUrl,
+        reply: onboardingReply,
+        dispatchedToMeta,
+      });
+    }
+
     let replyText = '';
     let replyModel = 'approval-shield';
+    let promptTokens = 0;
+    let completionTokens = 0;
+    let costUsd = 0;
 
-    if (buttonMatch) {
-      const action = buttonMatch[1].toLowerCase() as 'approve' | 'skip';
-      const requestedBidId = buttonMatch[2];
-      const matchedTender =
-        tenders.find(
-          (t) => t.id.toLowerCase() === requestedBidId.toLowerCase()
-        ) ?? topTender;
-      targetBidId = matchedTender?.id ?? requestedBidId;
-      interactiveAction = `${action}_${targetBidId}`;
-
-      if (action === 'approve') {
-        const estimatedZar = matchedTender?.estimatedValueZar ?? 14_850_000;
-        const approval = await createPendingApproval({
-          bidId: targetBidId,
-          tenderNumber: matchedTender?.tenderNumber ?? targetBidId,
-          actionType: 'submit_etenders',
-          totalBidZar: estimatedZar,
-          vatZar: estimatedZar * 0.15,
-          grandTotalZar: estimatedZar * 1.15,
-          targetResource: `WhatsApp interactive reply from ${sender}`,
-          commandPreview: `whatsapp.interactive("${interactiveAction}") // staged in pending_approval — awaiting human sign-off on /bid/${targetBidId}`,
-          requestedBy: `WhatsApp (${sender})`,
-        });
-        approvalRecordId = approval.id;
-
-        const complianceNote = compliance.isBidReady
+    if (buttonAction === 'approve') {
+      const blocking = resolved.docs
+        .filter((d) => d.status === 'expired' || d.status === 'missing')
+        .map((d) => d.shortLabel);
+      const complianceNote =
+        blocking.length === 0
           ? 'Compliance Vault verified.'
-          : `Compliance Alerts (${compliance.blockingAlerts.length}): ${compliance.blockingAlerts.join('; ')}`;
+          : `Compliance Alerts (${blocking.length}): ${blocking.join(', ')}`;
 
-        replyText = `Staged ${matchedTender?.tenderNumber ?? targetBidId} in Approval Shield (${approval.id}). No bid is auto-submitted via WhatsApp — complete final confirmation at /bid/${targetBidId}. ${complianceNote}`;
-      } else {
-        replyText = `Skipped ${matchedTender?.tenderNumber ?? targetBidId} (${targetBidId}). No submission was staged or sent.`;
-      }
+      replyText = `Staged ${resolved.targetTenderNumber} in Approval Shield (${resolved.approvalRecordId ?? 'pending'}). No bid is auto-submitted via WhatsApp — complete final confirmation at https://klerkdesk.mundusmk.co.za/bid/${resolved.targetBidId}. ${complianceNote}`;
+    } else if (buttonAction === 'skip') {
+      replyText = `Skipped ${resolved.targetTenderNumber} (${resolved.targetBidId}). No submission was staged or sent.`;
     } else {
-      const normalized = textBody.toLowerCase();
-      if (
-        normalized.includes('submit') ||
-        normalized.includes('broadcast') ||
-        normalized.includes('send')
-      ) {
-        const approval = await createPendingApproval({
-          bidId: targetBidId,
-          tenderNumber: topTender?.tenderNumber ?? 'T/GEO/042/2026',
-          actionType: normalized.includes('broadcast')
-            ? 'whatsapp_broadcast'
-            : 'submit_etenders',
-          totalBidZar: topTender?.estimatedValueZar ?? 14_850_000,
-          vatZar: (topTender?.estimatedValueZar ?? 14_850_000) * 0.15,
-          grandTotalZar: (topTender?.estimatedValueZar ?? 14_850_000) * 1.15,
-          targetResource: `WhatsApp request from ${sender}`,
-          commandPreview: `whatsapp.intent("${textBody.slice(0, 80)}") // blocked by Approval Shield`,
-          requestedBy: `WhatsApp (${sender})`,
-        });
-        approvalRecordId = approval.id;
-      }
+      const expiredOrMissing = resolved.docs
+        .filter((d) => d.status === 'expired' || d.status === 'missing')
+        .map((d) => `${d.shortLabel} (${d.status})`);
 
       const aiReply = await runTenderAI({
         task: 'whatsapp_qa',
         prompt: inboundContent || 'Give me my compliance & tender status.',
-        clientSpendUsd: settings.openRouterUsedUsd,
+        clientSpendUsd: resolved.costUsd,
+        monthlyCapUsd: resolved.capUsd,
         contextSnippets: [
-          `Compliance Ready: ${compliance.isBidReady}. Blocking Alerts: ${compliance.blockingAlerts.join('; ') || 'None'}`,
-          `Top Tender: ${topTender?.tenderNumber} (${topTender?.municipality}, closes ${topTender?.closingDate.slice(0, 10)})`,
-          approvalRecordId
-            ? `Approval Shield record ${approvalRecordId} created — sign off at /bid/${targetBidId}`
-            : '',
-        ].filter(Boolean),
+          `Contractor: ${resolved.companyName || 'Unconfigured Company'}`,
+          `Compliance Docs Flagged: ${expiredOrMissing.join(', ') || 'None — all valid'}`,
+          resolved.topTender
+            ? `Top Tender: ${resolved.topTender.tenderNumber} (${resolved.topTender.municipality}, closes ${resolved.topTender.closingDate.slice(0, 10)})`
+            : 'No active tender matches scanned yet.',
+        ],
       });
 
       replyText = aiReply.text;
       replyModel = aiReply.model;
+      promptTokens = aiReply.promptTokens;
+      completionTokens = aiReply.completionTokens;
+      costUsd = aiReply.estimatedCostUsd;
     }
 
-    await appendConvexMessage({
-      bidId: targetBidId,
-      role: 'user',
-      content: `[WhatsApp ${sender}] ${inboundContent || '(empty)'}`,
-      contentType: 'text',
-      approvalId: approvalRecordId ?? undefined,
-    });
-
-    await appendConvexMessage({
-      bidId: targetBidId,
-      role: 'assistant',
-      content: replyText,
-      contentType: 'markdown',
+    await convex.action(api.chat.persistWhatsappReplyAction, {
+      internalSecret,
+      userId: resolved.userId,
+      bidId: resolved.targetBidId,
+      replyText,
       modelUsed: replyModel,
-      approvalId: approvalRecordId ?? undefined,
+      approvalId: resolved.approvalRecordId ?? undefined,
+      promptTokens,
+      completionTokens,
+      costUsd,
     });
 
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-    const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
-
-    let dispatchedToMeta = false;
-    if (phoneNumberId && accessToken && sender) {
-      const metaRes = await fetch(
-        `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            messaging_product: 'whatsapp',
-            to: sender,
-            type: 'text',
-            text: { body: replyText },
-          }),
-        }
-      );
-      dispatchedToMeta = metaRes.ok;
-    }
+    const dispatchedToMeta = await sendMetaWhatsAppMessage(sender, replyText);
 
     return NextResponse.json({
       status: 'processed',
       sender,
-      bidId: targetBidId,
-      interactiveAction,
+      bidId: resolved.targetBidId,
+      interactiveAction: buttonMatch ? buttonCandidate : null,
       model: replyModel,
       reply: replyText,
-      approvalShieldTriggered: Boolean(approvalRecordId),
-      approvalRecordId,
+      approvalShieldTriggered: Boolean(resolved.approvalRecordId),
+      approvalRecordId: resolved.approvalRecordId,
       dispatchedToMeta,
     });
   } catch (error) {

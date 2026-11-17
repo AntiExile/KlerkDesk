@@ -12,15 +12,16 @@ export default async function DeskPage() {
   }
 
   const { compliance, tenders } = await getComplianceVaultAction();
-  const topId = tenders[0]?.id ?? 'ET-2026-WC-0842';
-  const topBid = await getBidWorkspaceAction(topId);
+  const topId = tenders[0]?.id;
+  const topBid = topId ? await getBidWorkspaceAction(topId) : null;
 
   return (
     <Dashboard
       initialCompliance={compliance}
       initialTenders={tenders}
-      initialBoq={topBid.boq}
-      initialApprovals={topBid.approvals}
+      initialBoq={topBid?.boq ?? []}
+      initialApprovals={topBid?.approvals ?? []}
     />
   );
 }
+

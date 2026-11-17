@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, type FormEvent } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuthActions } from '@convex-dev/auth/react';
-import { useMutation, useQuery } from 'convex/react';
+import { useConvexAuth, useMutation, useQuery } from 'convex/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Search,
@@ -22,18 +22,28 @@ import {
 } from 'lucide-react';
 import { api } from '@/convex/_generated/api';
 import { saveContractorSettingsAction } from '@/app/actions/settings';
+import { resetClientWorkspaceSnapshot } from '@/lib/convex-react';
 import { formatMillionsRand, formatShortClosingDate, getShortTenderLabel } from '@/lib/format';
+import { TENDER_SORT_OPTIONS, type TenderSortOption } from '@/lib/etenders-live';
+import { KlerkMascot, type KlerkMascotMood } from '@/components/KlerkMascot';
 import type { ComplianceSummary, TenderMatch } from '@/types';
+
+const DEMO_USERNAME = 'demo@mundusmk.co.za';
 
 interface SidebarProps {
   compliance: ComplianceSummary;
   tenders: TenderMatch[];
   activeBidId?: string;
+  workspaceMood?: KlerkMascotMood;
+  sortBy?: TenderSortOption;
+  isResorting?: boolean;
+  onChangeSortBy?: (sortBy: TenderSortOption) => void;
   onOpenSettings: () => void;
   onOpenVaultModal: () => void;
   onOpenCommandPalette: () => void;
   onOpenLiveSandbox: () => void;
   onTriggerNewScan: () => void;
+  onOpenSectorPreferences?: () => void;
 }
 
 const TENDER_GEOMETRIC_STYLES = [
@@ -61,16 +71,22 @@ export function Sidebar({
   compliance,
   tenders,
   activeBidId,
+  workspaceMood = 'idle',
+  sortBy = 'best_match',
+  isResorting = false,
+  onChangeSortBy,
   onOpenSettings,
   onOpenVaultModal,
   onOpenCommandPalette,
   onOpenLiveSandbox,
   onTriggerNewScan,
+  onOpenSectorPreferences,
 }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const { signOut } = useAuthActions();
-  const currentUser = useQuery(api.users.currentUser, {});
+  const { isAuthenticated } = useConvexAuth();
+  const currentUser = useQuery(api.users.currentUser, isAuthenticated ? {} : 'skip');
   const updateProfile = useMutation(api.users.updateProfile);
 
   const [quickMenuOpen, setQuickMenuOpen] = useState(false);
@@ -78,19 +94,34 @@ export function Sidebar({
   const quickMenuRef = useRef<HTMLDivElement>(null);
   const accountMenuRef = useRef<HTMLDivElement>(null);
 
-  const [companyName, setCompanyName] = useState('Karoo Civil & Infrastructure (Pty) Ltd');
-  const [csdMaaaNumber, setCsdMaaaNumber] = useState('MAAA0948215');
-  const [cidbGrade, setCidbGrade] = useState('6CE PE');
-  const [whatsappNumber, setWhatsappNumber] = useState('+27825550148');
+  const [companyName, setCompanyName] = useState('');
+  const [csdMaaaNumber, setCsdMaaaNumber] = useState('');
+  const [cidbGrade, setCidbGrade] = useState('');
+  const [whatsappNumber, setWhatsappNumber] = useState('');
   const [savingProfile, setSavingProfile] = useState(false);
   const [savedProfile, setSavedProfile] = useState(false);
 
   useEffect(() => {
     if (!currentUser) return;
-    setCompanyName(currentUser.companyName);
-    setCsdMaaaNumber(currentUser.csdMaaaNumber);
-    setCidbGrade(currentUser.cidbGrade);
-    setWhatsappNumber(currentUser.whatsappNumber);
+    const isDemoUser =
+      currentUser.username?.trim().toLowerCase() === DEMO_USERNAME;
+    const isLegacyKaroo =
+      !isDemoUser &&
+      currentUser.companyName === 'Karoo Civil & Infrastructure (Pty) Ltd' &&
+      currentUser.csdMaaaNumber === 'MAAA0948215';
+
+    if (isLegacyKaroo) {
+      setCompanyName('');
+      setCsdMaaaNumber('');
+      setCidbGrade('');
+      setWhatsappNumber('');
+      return;
+    }
+
+    setCompanyName(currentUser.companyName || '');
+    setCsdMaaaNumber(currentUser.csdMaaaNumber || '');
+    setCidbGrade(currentUser.cidbGrade || '');
+    setWhatsappNumber(currentUser.whatsappNumber || '');
   }, [currentUser]);
 
   useEffect(() => {
@@ -137,6 +168,7 @@ export function Sidebar({
     try {
       await signOut();
     } finally {
+      resetClientWorkspaceSnapshot();
       router.replace('/login');
     }
   };
@@ -147,9 +179,12 @@ export function Sidebar({
     if (parts.length >= 2) {
       return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
     }
-    return label.slice(0, 2).toUpperCase() || 'WM';
+    return label.slice(0, 2).toUpperCase() || 'KD';
   })();
 
+  const uploadedDocsCount = compliance.docs.filter(
+    (d) => d.status !== 'missing'
+  ).length;
   const attentionCount = compliance.blockingAlerts.length;
   const vaultChips = [
     { key: 'tax_pin', label: 'Tax' },
@@ -248,11 +283,9 @@ export function Sidebar({
             <Inbox className="size-3.5 text-zinc-400" />
             <span>Inbox / Vault</span>
           </span>
-          {attentionCount > 0 && (
-            <span className="inline-flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full bg-white/[0.08] text-zinc-200 font-mono text-[10px] tabular-nums">
-              {attentionCount}
-            </span>
-          )}
+          <span className="font-mono text-[11px] text-zinc-500 tabular-nums">
+            {uploadedDocsCount}/6
+          </span>
         </button>
       </div>
 
@@ -262,66 +295,109 @@ export function Sidebar({
           href="/desk"
           className="block rounded-2xl bg-[#18181B]/80 hover:bg-[#1C1C1F] border border-white/[0.06] p-3.5 text-center transition-colors no-underline"
         >
-          <div className="relative mx-auto size-9 rounded-xl bg-gradient-to-b from-zinc-700/60 to-zinc-900 border border-white/10 flex items-center justify-center shadow-inner">
-            <span className="text-xs font-semibold tracking-tight text-zinc-100">
-              M
-            </span>
-            <span
-              className={`absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full ring-2 ring-[#18181B] ${
-                compliance.isBidReady ? 'bg-emerald-400' : 'bg-amber-400'
-              }`}
-            />
+          <div className="mx-auto flex items-center justify-center">
+            <KlerkMascot variant="chief" size={52} mood={workspaceMood} />
           </div>
-          <div className="mt-2 text-xs font-medium text-zinc-100">
+          <div className="mt-1.5 text-xs font-medium text-zinc-100">
             KlerkDesk
           </div>
-          <div className="text-[11px] text-zinc-500 mt-0.5">
-            Chief of Staff • 6CE PE
+          <div className="text-[11px] text-zinc-500 mt-0.5 truncate">
+            {cidbGrade ? `Chief of Staff • ${cidbGrade}` : 'Chief of Staff'}
           </div>
         </Link>
       </div>
 
-      {/* Active Tender Threads ("Waiting on your yes" Pattern) */}
+      {/* Active Tender Threads */}
       <div className="flex-1 overflow-y-auto px-2.5 space-y-0.5">
-        <div className="px-2 pb-1.5 text-[10px] font-medium uppercase tracking-wider text-zinc-600">
-          Tender Threads
+        <div className="px-2 pb-1.5 flex items-center justify-between gap-2">
+          <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+            Tender Threads
+          </span>
+          {onOpenSectorPreferences && (
+            <button
+              type="button"
+              onClick={onOpenSectorPreferences}
+              className="text-[10px] font-medium text-emerald-400/90 hover:text-emerald-300 bg-transparent border-none p-0 cursor-pointer transition-colors"
+            >
+              Sectors
+            </button>
+          )}
         </div>
 
-        {tenders.map((tender, idx) => {
-          const isCurrent = activeBidId === tender.id || pathname === `/bid/${tender.id}`;
-          const geometricStyle =
-            TENDER_GEOMETRIC_STYLES[idx % TENDER_GEOMETRIC_STYLES.length];
-          const subtitle = getTenderThreadSubtitle(tender, idx);
-
-          return (
-            <Link
-              key={tender.id}
-              href={`/bid/${tender.id}`}
-              className={`flex items-start gap-2.5 px-2.5 py-2 rounded-xl transition-colors no-underline ${
-                isCurrent
-                  ? 'bg-[#1C1C1F] border border-white/[0.07]'
-                  : 'hover:bg-white/[0.03] border border-transparent'
-              }`}
+        {tenders.length > 0 && onChangeSortBy && (
+          <div className="px-1 pb-2">
+            <select
+              aria-label="Sort tender recommendations"
+              value={sortBy}
+              disabled={isResorting}
+              onChange={(e) =>
+                onChangeSortBy(e.target.value as TenderSortOption)
+              }
+              className="w-full h-7 px-2 rounded-lg bg-[#161619] hover:bg-[#1A1A1E] border border-white/[0.06] text-[11px] text-zinc-300 outline-none focus:border-emerald-400/50 cursor-pointer disabled:opacity-50"
             >
-              <span
-                className={`mt-0.5 size-6 rounded-lg border flex items-center justify-center shrink-0 text-[10px] font-semibold ${geometricStyle}`}
+              {TENDER_SORT_OPTIONS.map((opt) => (
+                <option key={opt.id} value={opt.id}>
+                  Sort: {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {tenders.length === 0 ? (
+          <div className="mx-1 mt-1 rounded-xl bg-[#161619] border border-white/[0.06] p-3 space-y-2">
+            <div className="text-[11px] font-medium text-zinc-300">
+              No active tender threads yet
+            </div>
+            <p className="text-[10.5px] text-zinc-500 leading-relaxed m-0">
+              Your workspace starts clean. Scan eTenders &amp; municipal portals or upload a tender PDF to begin.
+            </p>
+            <button
+              type="button"
+              onClick={onTriggerNewScan}
+              className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] border border-white/10 px-2.5 py-1.5 text-[11px] font-medium text-zinc-200 cursor-pointer transition-colors"
+            >
+              <Sparkles className="size-3 text-emerald-400" />
+              <span>Run portal scan</span>
+            </button>
+          </div>
+        ) : (
+          tenders.map((tender, idx) => {
+            const isCurrent = activeBidId === tender.id || pathname === `/bid/${tender.id}`;
+            const geometricStyle =
+              TENDER_GEOMETRIC_STYLES[idx % TENDER_GEOMETRIC_STYLES.length];
+            const subtitle = getTenderThreadSubtitle(tender, idx);
+
+            return (
+              <Link
+                key={tender.id}
+                href={`/bid/${tender.id}`}
+                className={`flex items-start gap-2.5 px-2.5 py-2 rounded-xl transition-colors no-underline ${
+                  isCurrent
+                    ? 'bg-[#1C1C1F] border border-white/[0.07]'
+                    : 'hover:bg-white/[0.03] border border-transparent'
+                }`}
               >
-                {idx % 2 === 0 ? '◆' : '●'}
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="text-xs font-medium text-zinc-200 truncate">
-                  {getShortTenderLabel(tender)}
+                <span
+                  className={`mt-0.5 size-6 rounded-lg border flex items-center justify-center shrink-0 text-[10px] font-semibold ${geometricStyle}`}
+                >
+                  {idx % 2 === 0 ? '◆' : '●'}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-medium text-zinc-200 truncate">
+                    {getShortTenderLabel(tender)}
+                  </div>
+                  <div className="text-[11px] text-zinc-500 truncate tabular-nums mt-0.5">
+                    {subtitle}
+                  </div>
                 </div>
-                <div className="text-[11px] text-zinc-500 truncate tabular-nums mt-0.5">
-                  {subtitle}
-                </div>
-              </div>
-            </Link>
-          );
-        })}
+              </Link>
+            );
+          })
+        )}
       </div>
 
-      {/* Bottom Footer Bar: WM Initials Popover + Sleek Compliance Vault Pill */}
+      {/* Bottom Footer Bar: Operator Initials Popover + Sleek Compliance Vault Pill */}
       <div className="relative p-2.5 border-t border-white/[0.06] flex items-center gap-1.5" ref={accountMenuRef}>
         <AnimatePresence>
           {accountMenuOpen && (
@@ -338,7 +414,7 @@ export function Sidebar({
                     {currentUser?.username ?? 'Contractor Operator'}
                   </div>
                   <div className="text-[10.5px] text-zinc-500 truncate">
-                    KlerkDesk • {cidbGrade}
+                    {cidbGrade ? `KlerkDesk • ${cidbGrade}` : 'KlerkDesk Operator'}
                   </div>
                 </div>
                 <span className="size-7 rounded-full bg-emerald-500/15 border border-emerald-400/25 text-emerald-300 text-[10px] font-semibold flex items-center justify-center shrink-0">
@@ -354,11 +430,12 @@ export function Sidebar({
                   <input
                     type="text"
                     value={companyName}
+                    placeholder="e.g. Apex Civil (Pty) Ltd"
                     onChange={(e) => {
                       setCompanyName(e.target.value);
                       setSavedProfile(false);
                     }}
-                    className="w-full rounded-lg bg-[#0A0A0B] border border-white/10 px-2.5 py-1.5 text-xs text-zinc-100 outline-none focus:border-emerald-400/50"
+                    className="w-full rounded-lg bg-[#0A0A0B] border border-white/10 px-2.5 py-1.5 text-xs text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-emerald-400/50"
                   />
                 </div>
 
@@ -370,11 +447,12 @@ export function Sidebar({
                     <input
                       type="text"
                       value={csdMaaaNumber}
+                      placeholder="MAAA..."
                       onChange={(e) => {
                         setCsdMaaaNumber(e.target.value);
                         setSavedProfile(false);
                       }}
-                      className="w-full rounded-lg bg-[#0A0A0B] border border-white/10 px-2 py-1.5 text-[11px] font-mono text-zinc-100 outline-none focus:border-emerald-400/50"
+                      className="w-full rounded-lg bg-[#0A0A0B] border border-white/10 px-2 py-1.5 text-[11px] font-mono text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-emerald-400/50"
                     />
                   </div>
                   <div>
@@ -384,11 +462,12 @@ export function Sidebar({
                     <input
                       type="text"
                       value={cidbGrade}
+                      placeholder="e.g. 6CE PE"
                       onChange={(e) => {
                         setCidbGrade(e.target.value);
                         setSavedProfile(false);
                       }}
-                      className="w-full rounded-lg bg-[#0A0A0B] border border-white/10 px-2 py-1.5 text-[11px] font-mono text-zinc-100 outline-none focus:border-emerald-400/50"
+                      className="w-full rounded-lg bg-[#0A0A0B] border border-white/10 px-2 py-1.5 text-[11px] font-mono text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-emerald-400/50"
                     />
                   </div>
                 </div>
@@ -400,11 +479,12 @@ export function Sidebar({
                   <input
                     type="tel"
                     value={whatsappNumber}
+                    placeholder="+27..."
                     onChange={(e) => {
                       setWhatsappNumber(e.target.value);
                       setSavedProfile(false);
                     }}
-                    className="w-full rounded-lg bg-[#0A0A0B] border border-white/10 px-2.5 py-1.5 text-[11px] font-mono text-zinc-100 outline-none focus:border-emerald-400/50"
+                    className="w-full rounded-lg bg-[#0A0A0B] border border-white/10 px-2.5 py-1.5 text-[11px] font-mono text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-emerald-400/50"
                   />
                 </div>
 
@@ -431,6 +511,14 @@ export function Sidebar({
               </form>
 
               <div className="pt-2 border-t border-white/[0.06] space-y-1">
+                <Link
+                  href="/onboarding"
+                  onClick={() => setAccountMenuOpen(false)}
+                  className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-zinc-300 hover:text-zinc-100 hover:bg-white/[0.05] no-underline transition-colors"
+                >
+                  <span>Onboarding &amp; Vault Setup</span>
+                  <Sparkles className="size-3 text-emerald-400" />
+                </Link>
                 <Link
                   href="/?landing=true"
                   onClick={() => setAccountMenuOpen(false)}
@@ -465,10 +553,10 @@ export function Sidebar({
         <button
           type="button"
           onClick={onOpenVaultModal}
-          className="flex-1 h-8 px-2.5 rounded-full bg-[#18181B] hover:bg-[#1C1C1F] border border-white/[0.06] flex items-center justify-between gap-1.5 cursor-pointer transition-colors min-w-0"
+          className="flex-1 h-8 px-2.5 rounded-lg bg-transparent hover:bg-white/[0.04] border border-transparent flex items-center justify-between gap-1.5 cursor-pointer transition-colors min-w-0"
         >
-          <span className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-300 truncate">
-            <ShieldCheck className="size-3 text-zinc-400 shrink-0" />
+          <span className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400 hover:text-zinc-200 truncate">
+            <ShieldCheck className="size-3.5 text-zinc-500 shrink-0" />
             <span className="truncate">Vault</span>
           </span>
           <span className="flex items-center gap-1 shrink-0" aria-label="Tax, CSD, COIDA, B-BBEE status">
@@ -495,7 +583,7 @@ export function Sidebar({
           type="button"
           onClick={onOpenSettings}
           aria-label="Open settings"
-          className="size-8 rounded-full bg-transparent hover:bg-white/[0.05] border-none flex items-center justify-center text-zinc-500 hover:text-zinc-200 shrink-0 cursor-pointer transition-colors"
+          className="size-8 rounded-lg bg-transparent hover:bg-white/[0.05] border-none flex items-center justify-center text-zinc-500 hover:text-zinc-200 shrink-0 cursor-pointer transition-colors"
         >
           <Settings className="size-3.5" />
         </button>

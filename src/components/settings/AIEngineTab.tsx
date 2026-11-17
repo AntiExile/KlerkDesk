@@ -7,6 +7,7 @@ import {
   getContractorSettingsAction,
   testSandboxConnectionAction,
 } from '@/app/actions/settings';
+import { useUsageSummaryQuery } from '@/lib/convex-react';
 import type { ContractorSettings } from '@/types';
 
 interface AIEngineTabProps {
@@ -14,6 +15,7 @@ interface AIEngineTabProps {
 }
 
 export function AIEngineTab({ onOpenModelSetup }: AIEngineTabProps) {
+  const liveUsage = useUsageSummaryQuery();
   const [settings, setSettings] = useState<ContractorSettings | null>(null);
   const [health, setHealth] = useState<{
     boatSdkReady: boolean;
@@ -40,15 +42,19 @@ export function AIEngineTab({ onOpenModelSetup }: AIEngineTabProps) {
     runTest();
   }, []);
 
-  const usedUsd = settings?.openRouterUsedUsd ?? 4.18;
-  const capUsd = settings?.openRouterSubKeyCapUsd ?? 15;
-  const pct = Math.min(100, Math.round((usedUsd / capUsd) * 100));
+  const usedUsd = liveUsage?.costUsd ?? settings?.openRouterUsedUsd ?? 0;
+  const capUsd = liveUsage?.capUsd ?? settings?.openRouterSubKeyCapUsd ?? 15;
+  const promptTokens = liveUsage?.promptTokens ?? 0;
+  const completionTokens = liveUsage?.completionTokens ?? 0;
+  const planTier = liveUsage?.planTier ?? settings?.planTier ?? 'starter';
+  const pct =
+    capUsd > 0 ? Math.min(100, Math.round((usedUsd / capUsd) * 100)) : 0;
 
   return (
     <div className="space-y-6">
       <div>
         <h3 className="text-sm font-semibold text-text-primary">
-          OpenRouter Per-Client Routing ($15/mo Sub-Key Cap)
+          OpenRouter Usage Ledger (${capUsd.toFixed(0)}/mo {planTier} cap)
         </h3>
         <p className="text-xs text-text-tertiary mt-1">
           DOM &amp; Q&amp;A tasks route to <code className="font-mono text-accent-300">deepseek/deepseek-v4-flash</code>; full tender PDF audits route to <code className="font-mono text-accent-300">anthropic/claude-sonnet-5.5</code>.
@@ -58,10 +64,10 @@ export function AIEngineTab({ onOpenModelSetup }: AIEngineTabProps) {
       <div className="p-4 rounded-xl bg-[#09090B]/70 border border-white/10 space-y-3">
         <div className="flex items-center justify-between text-xs">
           <span className="font-medium text-text-primary">
-            Monthly Sub-Key Usage
+            Monthly Usage ({liveUsage?.month ?? new Date().toISOString().slice(0, 7)})
           </span>
           <span className="font-mono text-accent-300 tabular-nums font-semibold">
-            ${usedUsd.toFixed(2)} / ${capUsd.toFixed(2)} ({pct}%)
+            ${usedUsd.toFixed(4)} / ${capUsd.toFixed(2)} ({pct}%)
           </span>
         </div>
         <div className="h-2 w-full bg-zinc-800 rounded-full overflow-hidden">
@@ -69,6 +75,10 @@ export function AIEngineTab({ onOpenModelSetup }: AIEngineTabProps) {
             className="h-full bg-gradient-to-r from-accent-500 to-accent-300 rounded-full transition-all"
             style={{ width: `${pct}%` }}
           />
+        </div>
+        <div className="flex items-center justify-between text-[11px] font-mono text-zinc-500 tabular-nums">
+          <span>Prompt tokens: {promptTokens.toLocaleString('en-ZA')}</span>
+          <span>Completion tokens: {completionTokens.toLocaleString('en-ZA')}</span>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
           <div className="p-3 rounded-lg bg-[#121215] border border-white/10">
@@ -99,7 +109,11 @@ export function AIEngineTab({ onOpenModelSetup }: AIEngineTabProps) {
         <div className="flex items-center justify-between p-3.5 rounded-xl bg-[#09090B]/70 border border-white/10 gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <StatusDot
-              status={health?.stagehandReady && health?.boatSdkReady ? 'success' : 'warning'}
+              status={
+                health?.stagehandReady && health?.boatSdkReady
+                  ? 'success'
+                  : 'warning'
+              }
               pulse={Boolean(health?.stagehandReady)}
               size="md"
             />

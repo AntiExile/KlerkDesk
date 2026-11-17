@@ -10,6 +10,7 @@ import type { Message } from '@/types';
 interface ChatAreaProps {
   bidId?: string;
   tenderNumber?: string;
+  estimatedValueZar?: number;
   messages: Message[];
   onMessagesChange: (updater: (prev: Message[]) => Message[]) => void;
   conversationTitle?: string;
@@ -20,7 +21,8 @@ interface ChatAreaProps {
 
 export function ChatArea({
   bidId,
-  tenderNumber = 'ET-2026-WC-0842',
+  tenderNumber = '',
+  estimatedValueZar = 0,
   messages,
   onMessagesChange,
   conversationTitle = 'Tender Q&A & Audit Copilot',
@@ -155,15 +157,18 @@ export function ChatArea({
 
         let shieldApprovalId: string | undefined;
         if (res.requiresApprovalShield && bidId) {
+          const subtotal = Math.max(0, estimatedValueZar);
+          const vat = Math.round(subtotal * 0.15 * 100) / 100;
+          const grand = Math.round((subtotal + vat) * 100) / 100;
           const apr = await triggerApprovalShieldAction({
             bidId,
-            tenderNumber,
+            tenderNumber: tenderNumber || bidId,
             actionType: 'submit_etenders',
-            totalBidZar: 14_591_500,
-            vatZar: 2_188_725,
-            grandTotalZar: 16_780_225,
-            targetResource: `https://www.etenders.gov.za/bid/${bidId}`,
-            commandPreview: `stagehand.submit('${tenderNumber}') // paused in pending_approval`,
+            totalBidZar: subtotal,
+            vatZar: vat,
+            grandTotalZar: grand,
+            targetResource: 'https://www.etenders.gov.za',
+            commandPreview: `stagehand.submit('${tenderNumber || bidId}') // paused in pending_approval`,
           });
           shieldApprovalId = apr.id;
           onApprovalTriggered?.();
@@ -214,7 +219,7 @@ export function ChatArea({
         setIsStreaming(false);
       }
     },
-    [bidId, isStreaming, onApprovalTriggered, onMessagesChange, tenderNumber]
+    [bidId, estimatedValueZar, isStreaming, onApprovalTriggered, onMessagesChange, tenderNumber]
   );
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -241,9 +246,6 @@ export function ChatArea({
             {conversationTitle}
           </h2>
         </div>
-        <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-accent-600/15 text-accent-300 border border-accent-500/25 shrink-0">
-          DeepSeek v4 Flash / Sonnet 5.5
-        </span>
       </div>
 
       <div

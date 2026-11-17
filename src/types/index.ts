@@ -3,6 +3,7 @@ export interface SourceCitation {
   sourceTitle?: string;
   filePath: string;
   textSnippet: string;
+  pageNumber?: number;
   fileType?: 'pdf' | 'csv' | 'txt' | 'md' | 'json' | 'docx' | 'xlsx' | string;
   characterCount?: number;
   score?: number;
@@ -132,6 +133,11 @@ export interface ComplianceSummary {
   lastCheckedAt: string;
 }
 
+export type SubmissionChannel =
+  | 'etenders_esubmission'
+  | 'municipal_email'
+  | 'tender_box';
+
 export interface TenderMatch {
   id: string;
   tenderNumber: string;
@@ -146,14 +152,19 @@ export interface TenderMatch {
   matchScore: number;
   status: 'matched' | 'staging' | 'pending_approval' | 'submitted';
   portalUrl: string;
+  submissionChannel?: SubmissionChannel;
   complianceReady: boolean;
   complianceBlocks: string[];
   summary: string;
   sbdFormsRequired: string[];
   stagedPdfFileName?: string;
   stagedPdfBase64?: string;
+  stampedSbdStorageId?: string;
   stampedSbdPageCount?: number;
   stampedSbdMethod?: string;
+  publishedDate?: string;
+  ocid?: string;
+  procurementCategory?: string;
 }
 
 export interface BoQItem {
@@ -190,6 +201,10 @@ export interface ApprovalShieldState {
   approvedBy?: string | null;
   approvedAt?: string | null;
   boatSessionId?: string | null;
+  mergedPackStorageId?: string;
+  mergedPackUrl?: string;
+  submissionChannel?: string;
+  whatsappDispatched?: boolean;
 }
 
 export interface BoatSessionInfo {
@@ -202,17 +217,64 @@ export interface BoatSessionInfo {
   stagehandSteps: string[];
 }
 
+export interface DirectorLinkedEnterprise {
+  enterpriseName: string;
+  csdNumber: string;
+  status: string;
+}
+
+export interface DirectorInfo {
+  fullName: string;
+  idNumber: string;
+  isOrganOfStateEmployee: boolean;
+  organOfStateDetails?: string;
+  linkedCsdEnterprises: DirectorLinkedEnterprise[];
+}
+
+export type PlanTier = 'starter' | 'pro' | 'ops';
+
+export interface UsageSummary {
+  month: string;
+  promptTokens: number;
+  completionTokens: number;
+  costUsd: number;
+  capUsd: number;
+  planTier: PlanTier;
+}
+
+export interface RegulatoryRule {
+  ruleKey: string;
+  title: string;
+  sourceUrl: string;
+  effectiveDate: string;
+  summary: string;
+  fetchedAt: string;
+}
+
 export interface ContractorSettings {
   companyName: string;
   registrationNumber: string;
   csdMaaaNumber: string;
+  taxRefNumber?: string;
   taxPinNumber: string;
   bbbeeLevel: string;
   cidbGrade: string;
   municipalRegions: string[];
+  sectors?: string[];
   whatsappNumber: string;
+  planTier?: PlanTier;
+  directors?: DirectorInfo[];
   openRouterSubKeyCapUsd: number;
   openRouterUsedUsd: number;
   preferredFastModel: string;
   preferredAuditModel: string;
+  scanPreferences?: {
+    sectors: string[];
+    provinces: string[];
+    tenderType: 'all' | 'rfb' | 'rfq' | 'rfp';
+    sortBy?: 'best_match' | 'closing_soon' | 'highest_value' | 'newest';
+    cidbGrade: string;
+    customKeywords: string;
+    configuredAt: string;
+  } | null;
 }

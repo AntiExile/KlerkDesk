@@ -2,6 +2,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { PDFDocument, StandardFonts, rgb, type PDFPage } from 'pdf-lib';
 import { extractText } from 'unpdf';
+import type { ComplianceDoc, DirectorInfo, SubmissionChannel } from '@/types';
+
+export const MAX_SUBMISSION_PACK_BYTES = 30 * 1024 * 1024;
+export const PPR_2022_THRESHOLD_ZAR = 50_000_000;
 
 export interface SbdStampPayload {
   tenderId: string;
@@ -14,6 +18,8 @@ export interface SbdStampPayload {
   cidbGrade: string;
   bbbeeLevel: string;
   grandTotalZar: number;
+  directors?: DirectorInfo[];
+  returnablePdfBuffers?: Uint8Array[];
 }
 
 export interface StampedSbdResult {
@@ -25,6 +31,42 @@ export interface StampedSbdResult {
   extractedSummary: string;
   formsStamped: string[];
   base64Pdf: string;
+}
+
+export interface MergedComplianceAttachment {
+  title: string;
+  shortLabel: string;
+  referenceNumber: string;
+  status: string;
+  fileName: string;
+  bytes?: Uint8Array;
+  contentType?: string;
+}
+
+export interface MergedSubmissionPackInput {
+  tenderNumber: string;
+  tenderTitle: string;
+  municipality: string;
+  closingDate: string;
+  submissionChannel: SubmissionChannel;
+  companyName: string;
+  registrationNumber: string;
+  csdMaaaNumber: string;
+  taxPinNumber: string;
+  cidbGrade: string;
+  bbbeeLevel: string;
+  grandTotalZar: number;
+  stampedSbdBytes: Uint8Array;
+  complianceAttachments: MergedComplianceAttachment[];
+  directors?: DirectorInfo[];
+}
+
+export interface MergedSubmissionPackResult {
+  fileName: string;
+  pdfBytes: Uint8Array;
+  byteLength: number;
+  pageCount: number;
+  attachmentsIncluded: number;
 }
 
 interface CoordinateEntry {
@@ -59,12 +101,148 @@ function formatRand(amount: number): string {
   })}`;
 }
 
-async function loadTemplateOrCreate(candidatePaths: string[]): Promise<{
+export function computePreferencePointsSystem(
+  grandTotalZar: number,
+  bbbeeLevel: string
+): {
+  systemLabel: string;
+  maxPoints: number;
+  claimedPoints: number;
+} {
+  const isNinetyTen = grandTotalZar > PPR_2022_THRESHOLD_ZAR;
+  const maxPoints = isNinetyTen ? 10 : 20;
+  const systemLabel = isNinetyTen
+    ? '90/10 (Acquisitions above R 50,000,000.00 — PPR 2022)'
+    : '80/20 (Acquisitions up to R 50,000,000.00 — PPR 2022)';
+
+  const lower = bbbeeLevel.toLowerCase();
+  const levelMatch = lower.match(/level\s*([1-8])/i);
+  const level = levelMatch
+    ? Number(levelMatch[1])
+    : lower.includes('eme') || lower.includes('exempt')
+      ? 1
+      : lower.includes('qse')
+        ? 2
+        : 0;
+
+  const points8020: Record<number, number> = {
+    1: 20,
+    2: 18,
+    3: 14,
+    4: 12,
+    5: 8,
+    6: 6,
+    7: 4,
+    8: 2,
+  };
+  const points9010: Record<number, number> = {
+    1: 10,
+    2: 9,
+    3: 6,
+    4: 5,
+    5: 4,
+    6: 3,
+    7: 2,
+    8: 1,
+  };
+
+  const claimedPoints = isNinetyTen
+    ? (points9010[level] ?? 0)
+    : (points8020[level] ?? 0);
+
+  return { systemLabel, maxPoints, claimedPoints };
+}
+
+function buildSbd4DirectorRows(
+  directors: DirectorInfo[] | undefined
+): CleanReturnableRow[] {
+  if (!directors || directors.length === 0) {
+    return [
+      {
+        label: 'DIRECTORS DISCLOSED (SCM 12/2026):',
+        value: 'Pending Director Schedule — update Directors under Contractor Settings',
+      },
+      {
+        label: 'ORGAN OF STATE EMPLOYMENT:',
+        value: 'NO — None declared by bidder directors',
+      },
+      {
+        label: 'LINKED CSD ENTERPRISES:',
+        value: 'None declared outside bidder entity',
+      },
+    ];
+  }
+
+  const hasStateEmployee = directors.some((d) => d.isOrganOfStateEmployee);
+  const stateDetails = directors
+    .filter((d) => d.isOrganOfStateEmployee)
+    .map(
+      (d) =>
+        `${d.fullName}${d.organOfStateDetails ? ` (${d.organOfStateDetails})` : ''}`
+    )
+    .join('; ');
+
+  const linkedEnterprises = directors.flatMap((d) =>
+    d.linkedCsdEnterprises.map(
+      (e) => `${e.enterpriseName} [${e.csdNumber} · ${e.status}]`
+    )
+  );
+
+  const directorSummary = directors
+    .map((d) => {
+      const maskedId =
+        d.idNumber.length >= 6
+          ? `${d.idNumber.slice(0, 6)}••••${d.idNumber.slice(-2)}`
+          : d.idNumber;
+      return `${d.fullName} (ID: ${maskedId})`;
+    })
+    .join(' | ');
+
+  return [
+    {
+      label: `DIRECTORS (${directors.length}) DISCLOSED:`,
+      value: directorSummary.slice(0, 88),
+    },
+    {
+      label: 'ORGAN OF STATE EMPLOYEE:',
+      value: hasStateEmployee
+        ? `YES — ${stateDetails || 'Declared'}`.slice(0, 88)
+        : 'NO — No director employed by Organ of State (SCM Inst. 12/2026)',
+    },
+    {
+      label: 'LINKED CSD ENTERPRISES:',
+      value:
+        linkedEnterprises.length > 0
+          ? linkedEnterprises.join('; ').slice(0, 88)
+          : 'None beyond primary CSD registration',
+    },
+  ];
+}
+
+async function loadTemplateOrCreate(
+  candidatePaths: string[],
+  returnableBuffer?: Uint8Array
+): Promise<{
   doc: PDFDocument;
   loadedFromDisk: boolean;
   templateName: string | null;
   hasAcroFields: boolean;
 }> {
+  if (returnableBuffer && returnableBuffer.byteLength > 0) {
+    try {
+      const doc = await PDFDocument.load(returnableBuffer);
+      const fields = doc.getForm().getFields();
+      return {
+        doc,
+        loadedFromDisk: true,
+        templateName: 'downloaded-tender-returnable.pdf',
+        hasAcroFields: fields.length > 0,
+      };
+    } catch {
+      // Fall through to disk templates
+    }
+  }
+
   for (const relPath of candidatePaths) {
     const templatePath = path.join(process.cwd(), relPath);
     try {
@@ -97,6 +275,17 @@ function buildAcroFieldMap(
   stampDate: string
 ): Record<string, string> {
   const formattedTotal = formatRand(payload.grandTotalZar);
+  const ppr = computePreferencePointsSystem(
+    payload.grandTotalZar,
+    payload.bbbeeLevel
+  );
+  const directors = payload.directors ?? [];
+  const hasStateEmp = directors.some((d) => d.isOrganOfStateEmployee);
+  const directorNames = directors.map((d) => d.fullName).join(', ');
+  const linkedCsds = directors
+    .flatMap((d) => d.linkedCsdEnterprises.map((e) => `${e.enterpriseName} (${e.csdNumber})`))
+    .join('; ');
+
   return {
     BID_NUMBER: payload.tenderNumber,
     TENDER_NUMBER: payload.tenderNumber,
@@ -115,6 +304,11 @@ function buildAcroFieldMap(
     SARS_TAX_PIN: payload.taxPinNumber,
     CIDB_GRADE: payload.cidbGrade,
     BBBEE_LEVEL: payload.bbbeeLevel,
+    PREFERENCE_POINTS_CLAIMED: `${ppr.claimedPoints.toFixed(2)} / ${ppr.maxPoints.toFixed(2)}`,
+    PREFERENCE_SYSTEM: ppr.systemLabel,
+    DIRECTORS_NAMES: directorNames,
+    ORGAN_OF_STATE_EMPLOYEE: hasStateEmp ? 'YES' : 'NO',
+    LINKED_CSD_ENTERPRISES: linkedCsds,
     TOTAL_BID_PRICE: formattedTotal,
     GRAND_TOTAL_ZAR: formattedTotal,
     DATE: stampDate,
@@ -204,22 +398,24 @@ async function renderCleanReturnableSheet(
     page.drawText(row.label, {
       x: 50,
       y,
-      size: 9.5,
+      size: 9,
       font: fontBold,
       color: rgb(0.2, 0.23, 0.28),
     });
 
-    page.drawText(row.value, {
+    page.drawText(row.value || '—', {
       x: 235,
       y,
-      size: 10,
+      size: 9.5,
       font: fontRegular,
       color: rgb(0.06, 0.08, 0.12),
+      maxWidth: 310,
+      lineHeight: 12,
     });
 
     page.drawLine({
-      start: { x: 50, y: y - 10 },
-      end: { x: 545, y: y - 10 },
+      start: { x: 50, y: y - 12 },
+      end: { x: 545, y: y - 12 },
       thickness: 0.4,
       color: rgb(0.88, 0.9, 0.92),
     });
@@ -275,11 +471,8 @@ async function renderCleanReturnableSheet(
 }
 
 /**
- * Stamps SBD 1, SBD 4, and SBD 6.1 PDFs using pdf-lib.
- * Loads official blank templates from `public/templates/sbd1.pdf`, `sbd4.pdf`,
- * and `sbd6_1.pdf` when present — filling AcroForm fields when available or
- * stamping deterministic `(x, y)` coordinates — and falls back to clean
- * National Treasury returnable sheets when templates are absent.
+ * Stamps SBD 1, SBD 4 (PFMA SCM Instruction 12 & 14 of 2026/27), and SBD 6.1
+ * (PPR 2022 80/20 vs 90/10 at R50M) using `pdf-lib`.
  */
 export async function generateStampedSbdPackage(
   payload: SbdStampPayload
@@ -289,12 +482,20 @@ export async function generateStampedSbdPackage(
   const templatesLoaded: string[] = [];
   const fieldMap = buildAcroFieldMap(payload, stampDate);
   const formattedTotal = formatRand(payload.grandTotalZar);
+  const ppr = computePreferencePointsSystem(
+    payload.grandTotalZar,
+    payload.bbbeeLevel
+  );
+  const sbd4DirectorRows = buildSbd4DirectorRows(payload.directors);
   let usedAcroForm = false;
 
   const formConfigs: SbdFormConfig[] = [
     {
       label: 'SBD 1',
-      candidatePaths: ['public/templates/sbd1.pdf'],
+      candidatePaths: [
+        'public/templates/sbd1.pdf',
+        'templates/sbd1.pdf',
+      ],
       flatCoordinates: [
         { x: 214, y: 720, value: payload.tenderNumber },
         { x: 214, y: 686, value: payload.municipality },
@@ -325,40 +526,48 @@ export async function generateStampedSbdPackage(
     },
     {
       label: 'SBD 4',
-      candidatePaths: ['public/templates/sbd4.pdf'],
+      candidatePaths: [
+        'public/templates/sbd4.pdf',
+        'templates/sbd4.pdf',
+      ],
       flatCoordinates: [
         { x: 214, y: 720, value: payload.companyName },
         { x: 214, y: 686, value: payload.registrationNumber },
-        { x: 214, y: 652, value: 'NO — No state employee financial interest declared' },
-        { x: 214, y: 618, value: 'NO — No connected persons employed by state (12m)' },
-        { x: 214, y: 584, value: 'YES — Independent Bid Determination confirmed' },
+        { x: 214, y: 652, value: sbd4DirectorRows[0]?.value ?? '' },
+        { x: 214, y: 618, value: sbd4DirectorRows[1]?.value ?? '' },
+        { x: 214, y: 584, value: sbd4DirectorRows[2]?.value ?? '' },
         { x: 214, y: 550, value: `${payload.tenderNumber} (${stampDate})` },
       ],
       cleanSheet: {
-        formTitle: "SBD 4 — BIDDER'S DISCLOSURE",
-        subtitle: 'Declaration of Interest & Independent Bid Determination',
+        formTitle: "SBD 4 — BIDDER'S DISCLOSURE (SCM INST. 12 & 14 OF 2026/27)",
+        subtitle: 'Declaration of Directors, State Employment & Linked CSD Enterprises',
         rows: [
           { label: 'LEGAL ENTITY NAME:', value: payload.companyName },
           { label: 'REGISTRATION NUMBER:', value: payload.registrationNumber },
           { label: 'CSD SUPPLIER NUMBER (MAAA):', value: payload.csdMaaaNumber },
           { label: 'TENDER REFERENCE:', value: payload.tenderNumber },
-          { label: 'STATE EMPLOYEE INTEREST:', value: 'NO — None declared' },
-          { label: 'CONNECTED PERSONS IN STATE:', value: 'NO — None employed within past 12 months' },
-          { label: 'INDEPENDENT BID DETERMINATION:', value: 'YES — Bid prepared independently without collusion' },
+          ...sbd4DirectorRows,
+          {
+            label: 'INDEPENDENT BID DETERMINATION:',
+            value: 'YES — Bid prepared independently without collusion (PFMA SCM Inst. 12)',
+          },
         ],
         declaration:
-          'I, the undersigned, certify that the information furnished on this disclosure form is true and correct and acknowledge that any misrepresentation may lead to disqualification or restriction.',
+          'I, the undersigned, certify that all directors, Organ of State connections, and linked CSD enterprises disclosed above are complete and accurate in terms of PFMA SCM Instructions 12 & 14 of 2026/27.',
       },
     },
     {
       label: 'SBD 6.1',
-      candidatePaths: ['public/templates/sbd6_1.pdf'],
+      candidatePaths: [
+        'public/templates/sbd6_1.pdf',
+        'templates/sbd6_1.pdf',
+      ],
       flatCoordinates: [
         { x: 214, y: 720, value: payload.tenderNumber },
         { x: 214, y: 686, value: payload.municipality },
         { x: 214, y: 652, value: payload.companyName },
-        { x: 214, y: 618, value: payload.bbbeeLevel },
-        { x: 214, y: 584, value: payload.csdMaaaNumber },
+        { x: 214, y: 618, value: ppr.systemLabel },
+        { x: 214, y: 584, value: `${ppr.claimedPoints.toFixed(2)} / ${ppr.maxPoints.toFixed(2)}` },
         { x: 214, y: 550, value: formattedTotal },
       ],
       cleanSheet: {
@@ -368,9 +577,12 @@ export async function generateStampedSbdPackage(
           { label: 'TENDER REFERENCE:', value: payload.tenderNumber },
           { label: 'ORGAN OF STATE / MUNICIPALITY:', value: payload.municipality },
           { label: 'NAME OF BIDDER:', value: payload.companyName },
-          { label: 'PREFERENCE POINT SYSTEM:', value: '80/20 (Acquisitions up to R 50,000,000.00)' },
+          { label: 'PREFERENCE POINT SYSTEM:', value: ppr.systemLabel },
           { label: 'B-BBEE CONTRIBUTOR STATUS:', value: payload.bbbeeLevel },
-          { label: 'POINTS CLAIMED:', value: '20.00 / 20.00' },
+          {
+            label: 'SPECIFIC GOALS POINTS CLAIMED:',
+            value: `${ppr.claimedPoints.toFixed(2)} / ${ppr.maxPoints.toFixed(2)}`,
+          },
           { label: 'CSD VERIFICATION NUMBER:', value: payload.csdMaaaNumber },
           { label: 'TOTAL BID OFFER (INCL. 15% VAT):', value: formattedTotal },
         ],
@@ -380,8 +592,13 @@ export async function generateStampedSbdPackage(
     },
   ];
 
-  for (const config of formConfigs) {
-    const loaded = await loadTemplateOrCreate(config.candidatePaths);
+  for (let i = 0; i < formConfigs.length; i++) {
+    const config = formConfigs[i];
+    const downloadedBuf = payload.returnablePdfBuffers?.[i];
+    const loaded = await loadTemplateOrCreate(
+      config.candidatePaths,
+      downloadedBuf
+    );
     if (loaded.loadedFromDisk && loaded.templateName) {
       templatesLoaded.push(loaded.templateName);
     }
@@ -438,6 +655,183 @@ export async function generateStampedSbdPackage(
     extractedSummary,
     formsStamped: formConfigs.map((c) => c.label),
     base64Pdf,
+  };
+}
+
+/**
+ * Builds the single consolidated submission pack PDF under 30MB when a contractor
+ * approves a tender on `/bid/[id]`:
+ *   1) Cover Sheet & Compliance Matrix
+ *   2) Stamped SBD 1, 4, 6.1 / MBD returnables
+ *   3) Active Compliance Vault PDFs / certified ID images from Convex `_storage`
+ */
+export async function buildMergedSubmissionPack(
+  input: MergedSubmissionPackInput
+): Promise<MergedSubmissionPackResult> {
+  const pack = await PDFDocument.create();
+  const fontBold = await pack.embedFont(StandardFonts.HelveticaBold);
+  const fontRegular = await pack.embedFont(StandardFonts.Helvetica);
+
+  // 1. Cover & Compliance Matrix Page
+  const cover = pack.addPage([595.28, 841.89]);
+  cover.drawText('KLERKDESK CONSOLIDATED TENDER SUBMISSION PACK', {
+    x: 48,
+    y: 790,
+    size: 13,
+    font: fontBold,
+    color: rgb(0.06, 0.08, 0.12),
+  });
+  cover.drawText(`${input.tenderNumber} — ${input.municipality}`, {
+    x: 48,
+    y: 770,
+    size: 10.5,
+    font: fontBold,
+    color: rgb(0.18, 0.22, 0.28),
+  });
+  cover.drawText(input.tenderTitle.slice(0, 96), {
+    x: 48,
+    y: 752,
+    size: 9.5,
+    font: fontRegular,
+    color: rgb(0.28, 0.32, 0.38),
+    maxWidth: 500,
+  });
+
+  const channelLabel =
+    input.submissionChannel === 'etenders_esubmission'
+      ? 'National Treasury eTenders Portal (Manual Contractor eSubmission)'
+      : input.submissionChannel === 'municipal_email'
+        ? 'Official Municipal SCM Email Submission'
+        : 'Physical Municipal Tender Box Drop-Off';
+
+  const summaryRows: Array<[string, string]> = [
+    ['Bidder Legal Entity', input.companyName],
+    ['CIPC Registration No.', input.registrationNumber || '—'],
+    ['CSD Supplier Number', input.csdMaaaNumber || '—'],
+    ['SARS TCS PIN (Masked)', input.taxPinNumber || '—'],
+    ['CIDB Grade', input.cidbGrade || '—'],
+    ['B-BBEE Status', input.bbbeeLevel || '—'],
+    ['Total Offer (Incl. 15% VAT)', formatRand(input.grandTotalZar)],
+    ['Closing Date', input.closingDate.slice(0, 10)],
+    ['Submission Channel', channelLabel],
+  ];
+
+  let y = 718;
+  for (const [label, value] of summaryRows) {
+    cover.drawText(label, {
+      x: 48,
+      y,
+      size: 8.5,
+      font: fontBold,
+      color: rgb(0.25, 0.28, 0.34),
+    });
+    cover.drawText(value, {
+      x: 215,
+      y,
+      size: 9,
+      font: fontRegular,
+      color: rgb(0.08, 0.1, 0.14),
+      maxWidth: 330,
+    });
+    y -= 20;
+  }
+
+  y -= 10;
+  cover.drawText('COMPLIANCE VAULT & RETURNABLE MATRIX', {
+    x: 48,
+    y,
+    size: 10,
+    font: fontBold,
+    color: rgb(0.08, 0.1, 0.14),
+  });
+  y -= 18;
+
+  for (const doc of input.complianceAttachments) {
+    const statusText = `${doc.shortLabel}: ${doc.status.toUpperCase()} (${doc.referenceNumber || 'N/A'}) — ${doc.fileName || 'No file'}`;
+    cover.drawText(statusText.slice(0, 96), {
+      x: 48,
+      y,
+      size: 8.5,
+      font: fontRegular,
+      color:
+        doc.status === 'valid' || doc.status === 'warning'
+          ? rgb(0.07, 0.32, 0.18)
+          : rgb(0.55, 0.12, 0.12),
+    });
+    y -= 16;
+  }
+
+  // 2. Append Stamped SBD 1 / 4 / 6.1 Returnables
+  const sbdDoc = await PDFDocument.load(input.stampedSbdBytes);
+  const sbdPages = await pack.copyPages(sbdDoc, sbdDoc.getPageIndices());
+  for (const page of sbdPages) {
+    pack.addPage(page);
+  }
+
+  // 3. Append Compliance Vault PDFs & Certified Images
+  let attachmentsIncluded = 0;
+  for (const attachment of input.complianceAttachments) {
+    if (!attachment.bytes || attachment.bytes.byteLength === 0) continue;
+
+    const lowerName = attachment.fileName.toLowerCase();
+    const isPdf =
+      attachment.contentType?.includes('pdf') || lowerName.endsWith('.pdf');
+    const isPng =
+      attachment.contentType?.includes('png') || lowerName.endsWith('.png');
+    const isJpg =
+      attachment.contentType?.includes('jpeg') ||
+      attachment.contentType?.includes('jpg') ||
+      lowerName.endsWith('.jpg') ||
+      lowerName.endsWith('.jpeg');
+
+    try {
+      if (isPdf) {
+        const subPdf = await PDFDocument.load(attachment.bytes);
+        const copied = await pack.copyPages(subPdf, subPdf.getPageIndices());
+        for (const p of copied) {
+          pack.addPage(p);
+        }
+        attachmentsIncluded += 1;
+      } else if (isPng || isJpg) {
+        const img = isPng
+          ? await pack.embedPng(attachment.bytes)
+          : await pack.embedJpg(attachment.bytes);
+        const page = pack.addPage([595.28, 841.89]);
+        const dims = img.scaleToFit(500, 740);
+        page.drawText(`${attachment.title} (${attachment.referenceNumber})`, {
+          x: 48,
+          y: 805,
+          size: 9.5,
+          font: fontBold,
+          color: rgb(0.1, 0.12, 0.16),
+        });
+        page.drawImage(img, {
+          x: 48,
+          y: 785 - dims.height,
+          width: dims.width,
+          height: dims.height,
+        });
+        attachmentsIncluded += 1;
+      }
+    } catch {
+      // Skip malformed binary file without aborting the submission pack
+    }
+  }
+
+  const pdfBytes = await pack.save({ useObjectStreams: true });
+  if (pdfBytes.byteLength > MAX_SUBMISSION_PACK_BYTES) {
+    throw new Error(
+      `Consolidated submission pack (${(pdfBytes.byteLength / (1024 * 1024)).toFixed(1)} MB) exceeds the 30MB limit. Compress large attachments and retry.`
+    );
+  }
+
+  const safeNumber = input.tenderNumber.replace(/[^a-zA-Z0-9_-]+/g, '_');
+  return {
+    fileName: `${safeNumber}_Consolidated_Submission_Pack.pdf`,
+    pdfBytes,
+    byteLength: pdfBytes.byteLength,
+    pageCount: pack.getPageCount(),
+    attachmentsIncluded,
   };
 }
 
