@@ -1,3 +1,5 @@
+import { redirect } from 'next/navigation';
+import { isAuthenticatedNextjs } from '@/lib/convexAuth';
 import { Dashboard } from '@/components/dashboard/Dashboard';
 import { getBidWorkspaceAction } from '@/app/actions/bid';
 import { getComplianceVaultAction } from '@/app/actions/compliance';
@@ -5,6 +7,10 @@ import { getComplianceVaultAction } from '@/app/actions/compliance';
 export const dynamic = 'force-dynamic';
 
 export default async function VaultPage() {
+  if (!(await isAuthenticatedNextjs())) {
+    redirect('/login');
+  }
+
   const { compliance, tenders } = await getComplianceVaultAction();
   const topId = tenders[0]?.id ?? 'ET-2026-WC-0842';
   const topBid = await getBidWorkspaceAction(topId);

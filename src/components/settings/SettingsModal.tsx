@@ -1,8 +1,9 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Building2, Cpu } from 'lucide-react';
+import { X, Building2, Cpu, ExternalLink } from 'lucide-react';
 import { DataSyncTab } from './DataSyncTab';
 import { AIEngineTab } from './AIEngineTab';
 
@@ -53,14 +54,24 @@ export function SettingsModal({ isOpen, onClose, onOpenModelSetup }: SettingsMod
                 <h2 className="text-sm font-semibold text-zinc-100 m-0">
                   KlerkDesk Settings
                 </h2>
-                <button
-                  type="button"
-                  onClick={onClose}
-                  aria-label="Close settings"
-                  className="size-7 rounded-full flex items-center justify-center text-zinc-400 hover:text-zinc-100 hover:bg-white/[0.06] transition-colors cursor-pointer border-none bg-transparent"
-                >
-                  <X className="size-4" />
-                </button>
+                <div className="flex items-center gap-2">
+                  <Link
+                    href="/?landing=true"
+                    onClick={onClose}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 text-[11px] font-medium text-zinc-300 hover:text-white no-underline transition-colors"
+                  >
+                    <span>View Landing Page</span>
+                    <ExternalLink className="size-3" />
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    aria-label="Close settings"
+                    className="size-7 rounded-full flex items-center justify-center text-zinc-400 hover:text-zinc-100 hover:bg-white/[0.06] transition-colors cursor-pointer border-none bg-transparent"
+                  >
+                    <X className="size-4" />
+                  </button>
+                </div>
               </div>
 
               <div className="flex gap-1 px-5 pt-2.5 border-b border-white/[0.06] shrink-0">

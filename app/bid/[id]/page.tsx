@@ -1,4 +1,5 @@
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
+import { isAuthenticatedNextjs } from '@/lib/convexAuth';
 import { getBidWorkspaceAction } from '@/app/actions/bid';
 import { getComplianceVaultAction } from '@/app/actions/compliance';
 import { BidRoomClient } from '@/components/bid/BidRoomClient';
@@ -10,6 +11,10 @@ interface BidPageProps {
 }
 
 export default async function BidPage({ params }: BidPageProps) {
+  if (!(await isAuthenticatedNextjs())) {
+    redirect('/login');
+  }
+
   const { id } = await params;
   const [workspace, vault] = await Promise.all([
     getBidWorkspaceAction(id),

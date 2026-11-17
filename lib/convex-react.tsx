@@ -4,12 +4,12 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useSyncExternalStore,
   type ReactNode,
 } from 'react';
 import {
-  ConvexProvider,
-  ConvexReactClient,
+  useConvexAuth,
   useMutation as useConvexMutation,
   useQuery as useConvexQuery,
 } from 'convex/react';
@@ -140,13 +140,30 @@ let liveConvexMutators: LiveConvexMutators | null = null;
  * updates into the shared reactive workspace store.
  */
 function ConvexLiveBridge() {
+  const { isAuthenticated } = useConvexAuth();
   const liveState = useConvexQuery(api.tenderOps.getWorkspaceState, {});
+  const ensureDemoSeed = useConvexMutation(api.users.ensureDemoSeed);
   const upsertDoc = useConvexMutation(api.tenderOps.upsertComplianceDoc);
   const refreshCsd = useConvexMutation(api.tenderOps.refreshCsdReport);
   const saveBoq = useConvexMutation(api.tenderOps.saveBoqItems);
   const saveStamp = useConvexMutation(api.tenderOps.saveStampedSbdPackage);
   const triggerApproval = useConvexMutation(api.tenderOps.triggerApprovalShield);
   const resolveApproval = useConvexMutation(api.tenderOps.resolveApprovalShield);
+  const seededForUserRef = useRef(false);
+
+  useEffect(() => {
+    if (
+      isAuthenticated &&
+      liveState &&
+      liveState.docs.length === 0 &&
+      !seededForUserRef.current
+    ) {
+      seededForUserRef.current = true;
+      void ensureDemoSeed({}).catch(() => {
+        seededForUserRef.current = false;
+      });
+    }
+  }, [isAuthenticated, liveState, ensureDemoSeed]);
 
   useEffect(() => {
     liveConvexMutators = {
@@ -207,17 +224,14 @@ function ConvexLiveBridge() {
 }
 
 const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
-const singletonConvexClient = convexUrl
-  ? new ConvexReactClient(convexUrl)
-  : null;
 
 export function ConvexClientProvider({ children }: { children: ReactNode }) {
-  if (singletonConvexClient) {
+  if (convexUrl) {
     return (
-      <ConvexProvider client={singletonConvexClient}>
+      <>
         <ConvexLiveBridge />
         {children}
-      </ConvexProvider>
+      </>
     );
   }
 

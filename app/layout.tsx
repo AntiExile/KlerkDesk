@@ -1,5 +1,7 @@
+import { Suspense, type ReactNode } from 'react';
 import type { Metadata } from 'next';
 import { Geist, Geist_Mono, Inter } from 'next/font/google';
+import { ConvexAuthNextjsServerProvider } from '@/lib/convexAuth';
 import { ConvexClientProvider } from '@/lib/convex-react';
 import './globals.css';
 
@@ -19,23 +21,33 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'KlerkDesk | tender.mundusmk.co.za',
+  title: 'KlerkDesk — Autonomous Back Office & Tender Ops | MUNDUSMK',
   description:
-    'Conversational South African municipal tender Chief of Staff, Compliance Vault, and Approval Shield.',
+    'Autonomous AI agents with a dedicated cloud desktop, POPIA compliance vault, and human Approval Shield for South African tender procurement and operations teams.',
 };
 
 export default function RootLayout({
   children,
 }: Readonly<{
-  children: React.ReactNode;
+  children: ReactNode;
 }>) {
+  const hasConvexUrl = Boolean(process.env.NEXT_PUBLIC_CONVEX_URL);
+
   return (
     <html
       lang="en"
       className={`dark ${geistSans.variable} ${inter.variable} ${geistMono.variable}`}
     >
-      <body className="bg-[#0C0C0D] text-zinc-100 antialiased">
-        <ConvexClientProvider>{children}</ConvexClientProvider>
+      <body className="bg-[#0A0A0B] text-zinc-100 antialiased">
+        {hasConvexUrl ? (
+          <Suspense>
+            <ConvexAuthNextjsServerProvider>
+              <ConvexClientProvider>{children}</ConvexClientProvider>
+            </ConvexAuthNextjsServerProvider>
+          </Suspense>
+        ) : (
+          <ConvexClientProvider>{children}</ConvexClientProvider>
+        )}
       </body>
     </html>
   );

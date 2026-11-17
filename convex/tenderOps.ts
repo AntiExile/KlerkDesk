@@ -1,9 +1,13 @@
+import { getAuthUserId } from '@convex-dev/auth/server';
 import { v } from 'convex/values';
+import type { Id } from './_generated/dataModel';
 import {
   action,
   internalMutation,
   mutation,
   query,
+  type MutationCtx,
+  type QueryCtx,
 } from './_generated/server';
 
 const ComplianceDocTypeValidator = v.union(
@@ -70,40 +74,128 @@ function evaluateDocExpiry(params: {
   return { ageDays, daysUntilExpiry, status, alertReason };
 }
 
+async function findTenderForScope(
+  ctx: QueryCtx | MutationCtx,
+  tenderId: string,
+  userId: Id<'users'> | null
+) {
+  if (userId) {
+    return await ctx.db
+      .query('tenderMatches')
+      .withIndex('by_user_id_and_tender_id', (q) =>
+        q.eq('userId', userId).eq('tenderId', tenderId)
+      )
+      .first();
+  }
+  return await ctx.db
+    .query('tenderMatches')
+    .withIndex('by_tender_id', (q) => q.eq('tenderId', tenderId))
+    .first();
+}
+
 export const getComplianceVault = query({
   args: {},
   handler: async (ctx) => {
-    const docs = await ctx.db.query('complianceDocs').collect();
-    return docs;
+    const userId = await getAuthUserId(ctx);
+    if (userId) {
+      return await ctx.db
+        .query('complianceDocs')
+        .withIndex('by_user_id', (q) => q.eq('userId', userId))
+        .collect();
+    }
+    return await ctx.db
+      .query('complianceDocs')
+      .withIndex('by_user_id', (q) => q.eq('userId', undefined))
+      .collect();
   },
 });
 
 export const getWorkspaceState = query({
   args: { bidId: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const [docs, tenders, approvals, messages] = await Promise.all([
-      ctx.db.query('complianceDocs').collect(),
-      ctx.db.query('tenderMatches').collect(),
-      args.bidId
-        ? ctx.db
-            .query('pendingApprovals')
-            .withIndex('by_bid_id', (q) => q.eq('bidId', args.bidId!))
-            .collect()
-        : ctx.db.query('pendingApprovals').collect(),
-      args.bidId
-        ? ctx.db
-            .query('messages')
-            .withIndex('by_bid_id', (q) => q.eq('bidId', args.bidId!))
-            .collect()
-        : ctx.db.query('messages').collect(),
-    ]);
+    const userId = await getAuthUserId(ctx);
 
-    const boqItems = args.bidId
-      ? await ctx.db
-          .query('boqItems')
-          .withIndex('by_tender_id', (q) => q.eq('tenderId', args.bidId!))
-          .collect()
-      : [];
+    const [docs, tenders, approvals, messages, boqItems] = userId
+      ? await Promise.all([
+          ctx.db
+            .query('complianceDocs')
+            .withIndex('by_user_id', (q) => q.eq('userId', userId))
+            .collect(),
+          ctx.db
+            .query('tenderMatches')
+            .withIndex('by_user_id', (q) => q.eq('userId', userId))
+            .collect(),
+          args.bidId
+            ? ctx.db
+                .query('pendingApprovals')
+                .withIndex('by_user_id_and_bid_id', (q) =>
+                  q.eq('userId', userId).eq('bidId', args.bidId!)
+                )
+                .collect()
+            : ctx.db
+                .query('pendingApprovals')
+                .withIndex('by_user_id', (q) => q.eq('userId', userId))
+                .collect(),
+          args.bidId
+            ? ctx.db
+                .query('messages')
+                .withIndex('by_user_id_and_bid_id', (q) =>
+                  q.eq('userId', userId).eq('bidId', args.bidId!)
+                )
+                .collect()
+            : ctx.db
+                .query('messages')
+                .withIndex('by_user_id', (q) => q.eq('userId', userId))
+                .collect(),
+          args.bidId
+            ? ctx.db
+                .query('boqItems')
+                .withIndex('by_user_id_and_tender_id', (q) =>
+                  q.eq('userId', userId).eq('tenderId', args.bidId!)
+                )
+                .collect()
+            : Promise.resolve([]),
+        ])
+      : await Promise.all([
+          ctx.db
+            .query('complianceDocs')
+            .withIndex('by_user_id', (q) => q.eq('userId', undefined))
+            .collect(),
+          ctx.db
+            .query('tenderMatches')
+            .withIndex('by_user_id', (q) => q.eq('userId', undefined))
+            .collect(),
+          args.bidId
+            ? ctx.db
+                .query('pendingApprovals')
+                .withIndex('by_user_id_and_bid_id', (q) =>
+                  q.eq('userId', undefined).eq('bidId', args.bidId!)
+                )
+                .collect()
+            : ctx.db
+                .query('pendingApprovals')
+                .withIndex('by_user_id', (q) => q.eq('userId', undefined))
+                .collect(),
+          args.bidId
+            ? ctx.db
+                .query('messages')
+                .withIndex('by_user_id_and_bid_id', (q) =>
+                  q.eq('userId', undefined).eq('bidId', args.bidId!)
+                )
+                .collect()
+            : ctx.db
+                .query('messages')
+                .withIndex('by_user_id', (q) => q.eq('userId', undefined))
+                .collect(),
+          args.bidId
+            ? ctx.db
+                .query('boqItems')
+                .withIndex('by_user_id_and_tender_id', (q) =>
+                  q.eq('userId', undefined).eq('tenderId', args.bidId!)
+                )
+                .collect()
+            : Promise.resolve([]),
+        ]);
 
     return { docs, tenders, boqItems, approvals, messages };
   },
@@ -112,23 +204,37 @@ export const getWorkspaceState = query({
 export const getBidWorkspace = query({
   args: { bidId: v.string() },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    const scopeUser = userId ?? undefined;
+
     const [tender, boqItems, docs, approvals, messages] = await Promise.all([
       ctx.db
         .query('tenderMatches')
-        .withIndex('by_tender_id', (q) => q.eq('tenderId', args.bidId))
+        .withIndex('by_user_id_and_tender_id', (q) =>
+          q.eq('userId', scopeUser).eq('tenderId', args.bidId)
+        )
         .first(),
       ctx.db
         .query('boqItems')
-        .withIndex('by_tender_id', (q) => q.eq('tenderId', args.bidId))
+        .withIndex('by_user_id_and_tender_id', (q) =>
+          q.eq('userId', scopeUser).eq('tenderId', args.bidId)
+        )
         .collect(),
-      ctx.db.query('complianceDocs').collect(),
+      ctx.db
+        .query('complianceDocs')
+        .withIndex('by_user_id', (q) => q.eq('userId', scopeUser))
+        .collect(),
       ctx.db
         .query('pendingApprovals')
-        .withIndex('by_bid_id', (q) => q.eq('bidId', args.bidId))
+        .withIndex('by_user_id_and_bid_id', (q) =>
+          q.eq('userId', scopeUser).eq('bidId', args.bidId)
+        )
         .collect(),
       ctx.db
         .query('messages')
-        .withIndex('by_bid_id', (q) => q.eq('bidId', args.bidId))
+        .withIndex('by_user_id_and_bid_id', (q) =>
+          q.eq('userId', scopeUser).eq('bidId', args.bidId)
+        )
         .collect(),
     ]);
 
@@ -172,9 +278,13 @@ export const upsertComplianceDoc = mutation({
     storageId: v.optional(v.union(v.id('_storage'), v.string())),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    const scopeUser = userId ?? undefined;
     const existing = await ctx.db
       .query('complianceDocs')
-      .withIndex('by_doc_type', (q) => q.eq('docType', args.docType))
+      .withIndex('by_user_id_and_doc_type', (q) =>
+        q.eq('userId', scopeUser).eq('docType', args.docType)
+      )
       .first();
 
     const maxAgeDays =
@@ -222,6 +332,7 @@ export const upsertComplianceDoc = mutation({
     };
 
     const payload = {
+      userId: scopeUser,
       docId: existing?.docId ?? `doc-${args.docType}`,
       docType: args.docType,
       title: existing?.title ?? defaults[args.docType].title,
@@ -251,10 +362,14 @@ export const upsertComplianceDoc = mutation({
 export const refreshCsdReport = mutation({
   args: {},
   handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    const scopeUser = userId ?? undefined;
     const today = new Date().toISOString();
     const existing = await ctx.db
       .query('complianceDocs')
-      .withIndex('by_doc_type', (q) => q.eq('docType', 'csd'))
+      .withIndex('by_user_id_and_doc_type', (q) =>
+        q.eq('userId', scopeUser).eq('docType', 'csd')
+      )
       .first();
 
     const fileName = `CSD_Report_MAAA0948215_${today.slice(0, 10)}.pdf`;
@@ -272,6 +387,7 @@ export const refreshCsdReport = mutation({
     }
 
     return await ctx.db.insert('complianceDocs', {
+      userId: scopeUser,
       docId: 'doc-csd',
       docType: 'csd',
       title: 'Central Supplier Database (CSD) Summary Report',
@@ -307,9 +423,13 @@ export const saveBoqItems = mutation({
     ),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    const scopeUser = userId ?? undefined;
     const existing = await ctx.db
       .query('boqItems')
-      .withIndex('by_tender_id', (q) => q.eq('tenderId', args.tenderId))
+      .withIndex('by_user_id_and_tender_id', (q) =>
+        q.eq('userId', scopeUser).eq('tenderId', args.tenderId)
+      )
       .collect();
 
     for (const row of existing) {
@@ -318,6 +438,7 @@ export const saveBoqItems = mutation({
 
     for (const item of args.items) {
       await ctx.db.insert('boqItems', {
+        userId: scopeUser,
         tenderId: args.tenderId,
         ...item,
         amountZar: Math.round(item.quantity * item.rateZar * 100) / 100,
@@ -336,10 +457,8 @@ export const saveStampedSbdPackage = mutation({
     storageId: v.optional(v.union(v.id('_storage'), v.string())),
   },
   handler: async (ctx, args) => {
-    const tender = await ctx.db
-      .query('tenderMatches')
-      .withIndex('by_tender_id', (q) => q.eq('tenderId', args.tenderId))
-      .first();
+    const userId = await getAuthUserId(ctx);
+    const tender = await findTenderForScope(ctx, args.tenderId, userId);
 
     if (tender) {
       await ctx.db.patch(tender._id, {
@@ -374,7 +493,9 @@ export const triggerApprovalShield = mutation({
     boatSessionId: v.optional(v.union(v.string(), v.null())),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
     const id = await ctx.db.insert('pendingApprovals', {
+      userId: userId ?? undefined,
       ...args,
       status: 'pending_approval',
       requestedAt: new Date().toISOString(),
@@ -382,10 +503,7 @@ export const triggerApprovalShield = mutation({
       approvedAt: null,
     });
 
-    const tender = await ctx.db
-      .query('tenderMatches')
-      .withIndex('by_tender_id', (q) => q.eq('tenderId', args.bidId))
-      .first();
+    const tender = await findTenderForScope(ctx, args.bidId, userId);
     if (tender) {
       await ctx.db.patch(tender._id, { status: 'pending_approval' });
     }
@@ -401,12 +519,16 @@ export const resolveApprovalShield = mutation({
     operatorName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
     const approval = await ctx.db
       .query('pendingApprovals')
       .withIndex('by_approval_id', (q) => q.eq('approvalId', args.approvalId))
       .first();
 
     if (!approval) return null;
+    if (userId && approval.userId && approval.userId !== userId) {
+      throw new Error('Forbidden: approval belongs to another user');
+    }
 
     const nextStatus = args.decision === 'approved' ? 'executed' : 'rejected';
     await ctx.db.patch(approval._id, {
@@ -416,10 +538,11 @@ export const resolveApprovalShield = mutation({
     });
 
     if (args.decision === 'approved') {
-      const tender = await ctx.db
-        .query('tenderMatches')
-        .withIndex('by_tender_id', (q) => q.eq('tenderId', approval.bidId))
-        .first();
+      const tender = await findTenderForScope(
+        ctx,
+        approval.bidId,
+        approval.userId ?? userId
+      );
       if (tender) {
         await ctx.db.patch(tender._id, { status: 'submitted' });
       }
@@ -444,7 +567,9 @@ export const appendMessage = mutation({
     approvalId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
     return await ctx.db.insert('messages', {
+      userId: userId ?? undefined,
       ...args,
       createdAt: new Date().toISOString(),
     });
@@ -463,7 +588,7 @@ export const runScheduledPortalScan = internalMutation({
       content:
         'Morning scan completed at 06:30 SAST across eTenders OCDS API and 4 Western Cape municipal portals.',
       contentType: 'markdown',
-      modelUsed: 'deepseek/deepseek-v4-flash',
+      modelUsed: 'openrouter/free',
       createdAt: new Date().toISOString(),
     });
   },
@@ -478,7 +603,7 @@ export const runDailyComplianceExpiryCheck = internalMutation({
   args: {},
   handler: async (ctx) => {
     const docs = await ctx.db.query('complianceDocs').collect();
-    const blocking: string[] = [];
+    const blockingByScope = new Map<string, string[]>();
 
     for (const doc of docs) {
       const evaluated = evaluateDocExpiry({
@@ -496,12 +621,17 @@ export const runDailyComplianceExpiryCheck = internalMutation({
       });
 
       if (evaluated.status === 'expired' && evaluated.alertReason) {
-        blocking.push(`${doc.shortLabel}: ${evaluated.alertReason}`);
+        const key = doc.userId ?? 'global';
+        const list = blockingByScope.get(key) ?? [];
+        list.push(`${doc.shortLabel}: ${evaluated.alertReason}`);
+        blockingByScope.set(key, list);
       }
     }
 
-    if (blocking.length > 0) {
+    for (const [scopeKey, blocking] of blockingByScope.entries()) {
+      if (blocking.length === 0) continue;
       await ctx.db.insert('pendingApprovals', {
+        userId: scopeKey === 'global' ? undefined : (scopeKey as Id<'users'>),
         approvalId: `apr-cron-${Date.now().toString(36)}`,
         bidId: 'ET-2026-WC-0842',
         tenderNumber: 'T/GEO/042/2026',

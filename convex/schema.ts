@@ -2,7 +2,21 @@ import { defineSchema, defineTable } from 'convex/server';
 import { v } from 'convex/values';
 
 export default defineSchema({
+  users: defineTable({
+    companyName: v.optional(v.string()),
+    registrationNumber: v.optional(v.string()),
+    csdMaaaNumber: v.optional(v.string()),
+    taxPinNumber: v.optional(v.string()),
+    bbbeeLevel: v.optional(v.string()),
+    cidbGrade: v.optional(v.string()),
+    municipalRegions: v.optional(v.array(v.string())),
+    whatsappNumber: v.optional(v.string()),
+    createdAt: v.optional(v.string()),
+    lastSignInAt: v.optional(v.string()),
+  }),
+
   complianceDocs: defineTable({
+    userId: v.optional(v.id('users')),
     docId: v.string(),
     docType: v.union(
       v.literal('csd'),
@@ -31,10 +45,13 @@ export default defineSchema({
     ),
     alertReason: v.optional(v.union(v.string(), v.null())),
   })
+    .index('by_user_id', ['userId'])
+    .index('by_user_id_and_doc_type', ['userId', 'docType'])
     .index('by_doc_type', ['docType'])
     .index('by_status', ['status']),
 
   tenderMatches: defineTable({
+    userId: v.optional(v.id('users')),
     tenderId: v.string(),
     tenderNumber: v.string(),
     title: v.string(),
@@ -62,9 +79,13 @@ export default defineSchema({
     stampedSbdBase64: v.optional(v.string()),
     stampedSbdPageCount: v.optional(v.number()),
     stampedSbdMethod: v.optional(v.string()),
-  }).index('by_tender_id', ['tenderId']),
+  })
+    .index('by_user_id', ['userId'])
+    .index('by_user_id_and_tender_id', ['userId', 'tenderId'])
+    .index('by_tender_id', ['tenderId']),
 
   boqItems: defineTable({
+    userId: v.optional(v.id('users')),
     tenderId: v.string(),
     itemId: v.string(),
     itemCode: v.string(),
@@ -74,9 +95,13 @@ export default defineSchema({
     quantity: v.number(),
     rateZar: v.number(),
     amountZar: v.number(),
-  }).index('by_tender_id', ['tenderId']),
+  })
+    .index('by_user_id', ['userId'])
+    .index('by_user_id_and_tender_id', ['userId', 'tenderId'])
+    .index('by_tender_id', ['tenderId']),
 
   messages: defineTable({
+    userId: v.optional(v.id('users')),
     bidId: v.optional(v.string()),
     role: v.union(v.literal('user'), v.literal('assistant')),
     content: v.string(),
@@ -89,9 +114,13 @@ export default defineSchema({
     modelUsed: v.optional(v.string()),
     approvalId: v.optional(v.string()),
     createdAt: v.string(),
-  }).index('by_bid_id', ['bidId']),
+  })
+    .index('by_user_id', ['userId'])
+    .index('by_user_id_and_bid_id', ['userId', 'bidId'])
+    .index('by_bid_id', ['bidId']),
 
   pendingApprovals: defineTable({
+    userId: v.optional(v.id('users')),
     approvalId: v.string(),
     bidId: v.string(),
     tenderNumber: v.string(),
@@ -121,6 +150,8 @@ export default defineSchema({
     stagedPdfFileName: v.optional(v.string()),
     stagedPdfBase64: v.optional(v.string()),
   })
+    .index('by_user_id', ['userId'])
+    .index('by_user_id_and_bid_id', ['userId', 'bidId'])
     .index('by_bid_id', ['bidId'])
     .index('by_status', ['status'])
     .index('by_approval_id', ['approvalId']),
