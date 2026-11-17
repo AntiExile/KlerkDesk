@@ -138,7 +138,6 @@ export function Sidebar({
       await signOut();
     } finally {
       router.replace('/login');
-      router.refresh();
     }
   };
 

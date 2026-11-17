@@ -1,4 +1,9 @@
-import { convexAuthNextjsProxy, nextjsProxyRedirect } from '@/lib/convexAuth';
+import { NextResponse, type NextRequest } from 'next/server';
+import { convexAuthNextjsProxy } from '@/lib/convexAuth';
+import {
+  buildPublicRedirectUrl,
+  rewriteSetCookiesForHttpsHeaders,
+} from '@/lib/authProxyHelpers';
 
 const AUTH_PAGES = new Set(['/login', '/signup']);
 
@@ -13,22 +18,28 @@ function isProtectedWorkspacePath(pathname: string): boolean {
   );
 }
 
-export default convexAuthNextjsProxy(async (request, { isAuthenticated }) => {
+const baseProxy = convexAuthNextjsProxy(async (request, { isAuthenticated }) => {
   const { pathname, searchParams } = request.nextUrl;
   const authed = await isAuthenticated();
 
   if (pathname === '/' && authed && searchParams.get('landing') !== 'true') {
-    return nextjsProxyRedirect(request, '/desk');
+    return NextResponse.redirect(buildPublicRedirectUrl(request, '/desk'));
   }
 
   if (AUTH_PAGES.has(pathname) && authed) {
-    return nextjsProxyRedirect(request, '/desk');
+    return NextResponse.redirect(buildPublicRedirectUrl(request, '/desk'));
   }
 
   if (isProtectedWorkspacePath(pathname) && !authed) {
-    return nextjsProxyRedirect(request, '/login');
+    return NextResponse.redirect(buildPublicRedirectUrl(request, '/login'));
   }
 });
+
+export default async function proxy(request: NextRequest) {
+  const response = await baseProxy(request);
+  rewriteSetCookiesForHttpsHeaders(response.headers, request.headers);
+  return response;
+}
 
 export const config = {
   matcher: [

@@ -31,7 +31,12 @@ export default function RootLayout({
 }: Readonly<{
   children: ReactNode;
 }>) {
-  const hasConvexUrl = Boolean(process.env.NEXT_PUBLIC_CONVEX_URL);
+  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
+  const hasConvexUrl = Boolean(
+    convexUrl &&
+      convexUrl.startsWith('https://') &&
+      !convexUrl.includes('your-deployment')
+  );
 
   return (
     <html

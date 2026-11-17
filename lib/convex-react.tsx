@@ -223,7 +223,13 @@ function ConvexLiveBridge() {
   return null;
 }
 
-const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
+const rawConvexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
+const convexUrl =
+  rawConvexUrl &&
+  rawConvexUrl.startsWith('https://') &&
+  !rawConvexUrl.includes('your-deployment')
+    ? rawConvexUrl
+    : undefined;
 
 export function ConvexClientProvider({ children }: { children: ReactNode }) {
   if (convexUrl) {

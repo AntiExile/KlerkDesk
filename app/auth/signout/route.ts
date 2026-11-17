@@ -1,3 +1,4 @@
 import { auth } from '@/lib/serverAuth';
+import { withForwardedAuthProxy } from '@/lib/authProxyHelpers';
 
-export const POST = auth.signOutHandler;
+export const POST = withForwardedAuthProxy(auth.signOutHandler);
