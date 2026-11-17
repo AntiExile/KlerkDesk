@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { runTenderAI } from '@/lib/openrouter';
 import {
+  appendConvexMessage,
   createPendingApproval,
   getComplianceSummary,
   getContractorSettings,
@@ -36,6 +37,29 @@ const MetaWebhookSchema = z.object({
                         text: z
                           .object({
                             body: z.string(),
+                          })
+                          .optional(),
+                        interactive: z
+                          .object({
+                            type: z.string().optional(),
+                            button_reply: z
+                              .object({
+                                id: z.string(),
+                                title: z.string().optional(),
+                              })
+                              .optional(),
+                            list_reply: z
+                              .object({
+                                id: z.string(),
+                                title: z.string().optional(),
+                              })
+                              .optional(),
+                          })
+                          .optional(),
+                        button: z
+                          .object({
+                            payload: z.string().optional(),
+                            text: z.string().optional(),
                           })
                           .optional(),
                       })
@@ -94,7 +118,10 @@ export async function GET(request: NextRequest) {
     process.env.WHATSAPP_VERIFY_TOKEN || 'mundus-tender-ops-verify';
 
   if (mode === 'subscribe' && token === expectedToken && challenge) {
-    return new NextResponse(challenge, { status: 200 });
+    return new NextResponse(challenge, {
+      status: 200,
+      headers: { 'Content-Type': 'text/plain' },
+    });
   }
 
   return NextResponse.json(
@@ -161,6 +188,19 @@ export async function POST(request: NextRequest) {
 
     const inbound = messages[0];
     const textBody = inbound.text?.body?.trim() ?? '';
+    const interactiveReplyId =
+      inbound.interactive?.button_reply?.id?.trim() ??
+      inbound.interactive?.list_reply?.id?.trim() ??
+      inbound.button?.payload?.trim() ??
+      '';
+    const interactiveReplyTitle =
+      inbound.interactive?.button_reply?.title?.trim() ??
+      inbound.interactive?.list_reply?.title?.trim() ??
+      inbound.button?.text?.trim() ??
+      '';
+    const inboundContent = interactiveReplyId
+      ? `${interactiveReplyTitle || interactiveReplyId} (${interactiveReplyId})`
+      : textBody;
     const sender = inbound.from;
 
     const [compliance, tenders, settings] = await Promise.all([
@@ -170,41 +210,103 @@ export async function POST(request: NextRequest) {
     ]);
 
     const topTender = tenders[0];
-    const normalized = textBody.toLowerCase();
+    const buttonCandidate = (interactiveReplyId || textBody).trim();
+    const buttonMatch = /^(approve|skip)_([A-Za-z0-9-]+)$/i.exec(buttonCandidate);
 
     let approvalRecordId: string | null = null;
-    if (
-      normalized.includes('submit') ||
-      normalized.includes('broadcast') ||
-      normalized.includes('send')
-    ) {
-      const approval = await createPendingApproval({
-        bidId: topTender?.id ?? 'ET-2026-WC-0842',
-        tenderNumber: topTender?.tenderNumber ?? 'T/GEO/042/2026',
-        actionType: normalized.includes('broadcast')
-          ? 'whatsapp_broadcast'
-          : 'submit_etenders',
-        totalBidZar: topTender?.estimatedValueZar ?? 14_850_000,
-        vatZar: (topTender?.estimatedValueZar ?? 14_850_000) * 0.15,
-        grandTotalZar: (topTender?.estimatedValueZar ?? 14_850_000) * 1.15,
-        targetResource: `WhatsApp request from ${sender}`,
-        commandPreview: `whatsapp.intent("${textBody.slice(0, 80)}") // blocked by Approval Shield`,
-        requestedBy: `WhatsApp (${sender})`,
+    let targetBidId = topTender?.id ?? 'ET-2026-WC-0842';
+    let interactiveAction: string | null = null;
+    let replyText = '';
+    let replyModel = 'approval-shield';
+
+    if (buttonMatch) {
+      const action = buttonMatch[1].toLowerCase() as 'approve' | 'skip';
+      const requestedBidId = buttonMatch[2];
+      const matchedTender =
+        tenders.find(
+          (t) => t.id.toLowerCase() === requestedBidId.toLowerCase()
+        ) ?? topTender;
+      targetBidId = matchedTender?.id ?? requestedBidId;
+      interactiveAction = `${action}_${targetBidId}`;
+
+      if (action === 'approve') {
+        const estimatedZar = matchedTender?.estimatedValueZar ?? 14_850_000;
+        const approval = await createPendingApproval({
+          bidId: targetBidId,
+          tenderNumber: matchedTender?.tenderNumber ?? targetBidId,
+          actionType: 'submit_etenders',
+          totalBidZar: estimatedZar,
+          vatZar: estimatedZar * 0.15,
+          grandTotalZar: estimatedZar * 1.15,
+          targetResource: `WhatsApp interactive reply from ${sender}`,
+          commandPreview: `whatsapp.interactive("${interactiveAction}") // staged in pending_approval — awaiting human sign-off on /bid/${targetBidId}`,
+          requestedBy: `WhatsApp (${sender})`,
+        });
+        approvalRecordId = approval.id;
+
+        const complianceNote = compliance.isBidReady
+          ? 'Compliance Vault verified.'
+          : `Compliance Alerts (${compliance.blockingAlerts.length}): ${compliance.blockingAlerts.join('; ')}`;
+
+        replyText = `Staged ${matchedTender?.tenderNumber ?? targetBidId} in Approval Shield (${approval.id}). No bid is auto-submitted via WhatsApp — complete final confirmation at /bid/${targetBidId}. ${complianceNote}`;
+      } else {
+        replyText = `Skipped ${matchedTender?.tenderNumber ?? targetBidId} (${targetBidId}). No submission was staged or sent.`;
+      }
+    } else {
+      const normalized = textBody.toLowerCase();
+      if (
+        normalized.includes('submit') ||
+        normalized.includes('broadcast') ||
+        normalized.includes('send')
+      ) {
+        const approval = await createPendingApproval({
+          bidId: targetBidId,
+          tenderNumber: topTender?.tenderNumber ?? 'T/GEO/042/2026',
+          actionType: normalized.includes('broadcast')
+            ? 'whatsapp_broadcast'
+            : 'submit_etenders',
+          totalBidZar: topTender?.estimatedValueZar ?? 14_850_000,
+          vatZar: (topTender?.estimatedValueZar ?? 14_850_000) * 0.15,
+          grandTotalZar: (topTender?.estimatedValueZar ?? 14_850_000) * 1.15,
+          targetResource: `WhatsApp request from ${sender}`,
+          commandPreview: `whatsapp.intent("${textBody.slice(0, 80)}") // blocked by Approval Shield`,
+          requestedBy: `WhatsApp (${sender})`,
+        });
+        approvalRecordId = approval.id;
+      }
+
+      const aiReply = await runTenderAI({
+        task: 'whatsapp_qa',
+        prompt: inboundContent || 'Give me my compliance & tender status.',
+        clientSpendUsd: settings.openRouterUsedUsd,
+        contextSnippets: [
+          `Compliance Ready: ${compliance.isBidReady}. Blocking Alerts: ${compliance.blockingAlerts.join('; ') || 'None'}`,
+          `Top Tender: ${topTender?.tenderNumber} (${topTender?.municipality}, closes ${topTender?.closingDate.slice(0, 10)})`,
+          approvalRecordId
+            ? `Approval Shield record ${approvalRecordId} created — sign off at /bid/${targetBidId}`
+            : '',
+        ].filter(Boolean),
       });
-      approvalRecordId = approval.id;
+
+      replyText = aiReply.text;
+      replyModel = aiReply.model;
     }
 
-    const aiReply = await runTenderAI({
-      task: 'whatsapp_qa',
-      prompt: textBody || 'Give me my compliance & tender status.',
-      clientSpendUsd: settings.openRouterUsedUsd,
-      contextSnippets: [
-        `Compliance Ready: ${compliance.isBidReady}. Blocking Alerts: ${compliance.blockingAlerts.join('; ') || 'None'}`,
-        `Top Tender: ${topTender?.tenderNumber} (${topTender?.municipality}, closes ${topTender?.closingDate.slice(0, 10)})`,
-        approvalRecordId
-          ? `Approval Shield record ${approvalRecordId} created — sign off at /bid/${topTender?.id ?? 'ET-2026-WC-0842'}`
-          : '',
-      ].filter(Boolean),
+    await appendConvexMessage({
+      bidId: targetBidId,
+      role: 'user',
+      content: `[WhatsApp ${sender}] ${inboundContent || '(empty)'}`,
+      contentType: 'text',
+      approvalId: approvalRecordId ?? undefined,
+    });
+
+    await appendConvexMessage({
+      bidId: targetBidId,
+      role: 'assistant',
+      content: replyText,
+      contentType: 'markdown',
+      modelUsed: replyModel,
+      approvalId: approvalRecordId ?? undefined,
     });
 
     const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
@@ -224,7 +326,7 @@ export async function POST(request: NextRequest) {
             messaging_product: 'whatsapp',
             to: sender,
             type: 'text',
-            text: { body: aiReply.text },
+            text: { body: replyText },
           }),
         }
       );
@@ -234,8 +336,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       status: 'processed',
       sender,
-      model: aiReply.model,
-      reply: aiReply.text,
+      bidId: targetBidId,
+      interactiveAction,
+      model: replyModel,
+      reply: replyText,
       approvalShieldTriggered: Boolean(approvalRecordId),
       approvalRecordId,
       dispatchedToMeta,

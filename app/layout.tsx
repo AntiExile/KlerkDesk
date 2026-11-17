@@ -19,7 +19,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Mundus Ops | tender.mundusmk.co.za',
+  title: 'KlerkDesk | tender.mundusmk.co.za',
   description:
     'Conversational South African municipal tender Chief of Staff, Compliance Vault, and Approval Shield.',
 };

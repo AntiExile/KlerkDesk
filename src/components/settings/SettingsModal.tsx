@@ -51,7 +51,7 @@ export function SettingsModal({ isOpen, onClose, onOpenModelSetup }: SettingsMod
             <div className="bg-[#141416] border border-white/10 rounded-2xl shadow-2xl shadow-black/70 overflow-hidden max-h-[85vh] flex flex-col">
               <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.06] shrink-0">
                 <h2 className="text-sm font-semibold text-zinc-100 m-0">
-                  Mundus Ops Settings
+                  KlerkDesk Settings
                 </h2>
                 <button
                   type="button"

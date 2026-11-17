@@ -465,8 +465,8 @@ export function Dashboard({
             />
             <span className="truncate">
               {activeTender
-                ? `Mundus Ops • ${getShortTenderLabel(activeTender)}`
-                : 'Mundus Ops'}
+                ? `KlerkDesk • ${getShortTenderLabel(activeTender)}`
+                : 'KlerkDesk'}
             </span>
           </div>
 
@@ -751,7 +751,7 @@ export function Dashboard({
               placeholder={
                 droppedFileName
                   ? `Auditing ${droppedFileName}...`
-                  : 'Message Mundus Ops or drop a tender PDF...'
+                  : 'Message KlerkDesk or drop a tender PDF...'
               }
               className="flex-1 bg-transparent border-none outline-none text-sm text-zinc-100 placeholder:text-zinc-500 px-1"
             />

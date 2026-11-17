@@ -1,12 +1,52 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { BoatApi, Configuration, stopAndRemove, waitUntilReady } from '@boatdev/sdk';
-import { Stagehand, localBrowser } from '@browserbasehq/stagehand';
-import { runTenderAI } from '../lib/openrouter';
+import type { Stagehand, StagehandBrowser } from '@browserbasehq/stagehand';
+import { isOpenRouterDevFree, runTenderAI } from '../lib/openrouter';
 import {
   createPendingApproval,
   getComplianceSummary,
   getContractorSettings,
   getTenderMatches,
 } from '../lib/convex-store';
+
+/**
+ * Loads `.env.local` from `process.cwd()` when running the worker directly via
+ * `npx tsx workers/scan-portals.ts`, preserving any explicit shell overrides.
+ */
+function loadLocalEnvFile(fileName = '.env.local') {
+  const envPath = resolve(process.cwd(), fileName);
+  if (!existsSync(envPath)) return;
+
+  const raw = readFileSync(envPath, 'utf8');
+  for (const rawLine of raw.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+
+    const eqIndex = line.indexOf('=');
+    if (eqIndex <= 0) continue;
+
+    const key = line.slice(0, eqIndex).trim();
+    if (!key || process.env[key] !== undefined) continue;
+
+    let value = line.slice(eqIndex + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    } else {
+      const commentIdx = value.search(/\s+#/);
+      if (commentIdx !== -1) {
+        value = value.slice(0, commentIdx).trim();
+      }
+    }
+
+    process.env[key] = value;
+  }
+}
+
+loadLocalEnvFile();
 
 interface OcdsDocument {
   id?: string;
@@ -85,9 +125,13 @@ async function fetchETendersOcdsReleases(): Promise<OcdsRelease[]> {
  * specifically for municipal RFQ portals and eTenders submission staging.
  */
 async function scanMunicipalRfqPortalsWithStagehand() {
-  const headless = process.env.HEADLESS !== 'false';
+  const isLocalBrowser = process.env.LOCAL_BROWSER === 'true';
+  const headless = isLocalBrowser
+    ? process.env.HEADLESS === 'true'
+    : process.env.HEADLESS !== 'false';
   const apiKey = process.env.BOAT_API_KEY ?? process.env.BOAT_DEV_API_KEY ?? '';
-  const useBoatVm = process.env.NODE_ENV === 'production' && Boolean(apiKey);
+  const useBoatVm =
+    !isLocalBrowser && process.env.NODE_ENV === 'production' && Boolean(apiKey);
 
   if (useBoatVm) {
     const boat = new BoatApi(
@@ -116,29 +160,64 @@ async function scanMunicipalRfqPortalsWithStagehand() {
     return;
   }
 
-  if (process.env.RUN_LIVE_BROWSER === 'true') {
-    const browser = await localBrowser.launch({ headless });
-    const stagehand = await Stagehand.create({ browser });
+  if (isLocalBrowser || process.env.RUN_LIVE_BROWSER === 'true') {
+    let browser: StagehandBrowser | null = null;
+    let stagehand: Stagehand | null = null;
     try {
+      const { Stagehand: StagehandClass, localBrowser } = await import(
+        '@browserbasehq/stagehand'
+      );
+      browser = await localBrowser.launch({ headless });
+      stagehand = await StagehandClass.create({ browser });
       const page = await stagehand.browser.context.activePage();
       if (page) {
         for (const portal of MUNICIPAL_RFQ_PORTALS) {
-          console.log(`[MundusMK Worker] Stagehand scanning municipal RFQ portal: ${portal.municipality}`);
-          await page.goto(portal.url, { waitUntil: 'domcontentloaded' });
+          console.log(
+            `[MundusMK Worker] Stagehand scanning municipal RFQ portal: ${portal.municipality} (headless=${String(headless)})`
+          );
+          try {
+            await page.goto(portal.url, {
+              waitUntil: 'domcontentloaded',
+              timeout: 15_000,
+            });
+          } catch (navErr) {
+            console.warn(
+              `[MundusMK Worker] Failed to load ${portal.municipality} (${portal.url}):`,
+              navErr instanceof Error ? navErr.message : String(navErr)
+            );
+          }
         }
       }
+    } catch (err) {
+      console.warn(
+        '[MundusMK Worker] Local Playwright/Stagehand scan skipped:',
+        err instanceof Error ? err.message : String(err)
+      );
     } finally {
-      await stagehand.close();
+      const closeWithTimeout = (promise: Promise<void>) =>
+        Promise.race([
+          promise.catch(() => {}),
+          new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+        ]);
+
+      if (stagehand) {
+        await closeWithTimeout(stagehand.close());
+      }
+      if (browser && !browser.closed) {
+        await closeWithTimeout(browser.close());
+      }
     }
   } else {
     console.log(
-      `[MundusMK Worker] Stagehand reserved for ${MUNICIPAL_RFQ_PORTALS.length} municipal RFQ portals (HEADLESS=${String(headless)}; set RUN_LIVE_BROWSER=true for live Chromium).`
+      `[MundusMK Worker] Stagehand reserved for ${MUNICIPAL_RFQ_PORTALS.length} municipal RFQ portals (HEADLESS=${String(headless)}; set LOCAL_BROWSER=true or RUN_LIVE_BROWSER=true for live Chromium).`
     );
   }
 }
 
 async function scanPortals() {
-  console.log('[MundusMK Worker] Starting National OCDS + Municipal RFQ tender scan...');
+  console.log(
+    `[MundusMK Worker] Starting National OCDS + Municipal RFQ tender scan (LOCAL_BROWSER=${String(process.env.LOCAL_BROWSER === 'true')}, OPENROUTER_DEV_FREE=${String(isOpenRouterDevFree())})...`
+  );
   const [settings, compliance, existingMatches, ocdsReleases] = await Promise.all([
     getContractorSettings(),
     getComplianceSummary(),
@@ -200,7 +279,11 @@ async function scanPortals() {
   }
 }
 
-scanPortals().catch((err) => {
-  console.error('[MundusMK Worker] Fatal scan error:', err);
-  process.exitCode = 1;
-});
+scanPortals()
+  .then(() => {
+    process.exit(0);
+  })
+  .catch((err) => {
+    console.error('[MundusMK Worker] Fatal scan error:', err);
+    process.exit(1);
+  });

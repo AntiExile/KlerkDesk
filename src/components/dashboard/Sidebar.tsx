@@ -197,7 +197,7 @@ export function Sidebar({
             />
           </div>
           <div className="mt-2 text-xs font-medium text-zinc-100">
-            Mundus Ops
+            KlerkDesk
           </div>
           <div className="text-[11px] text-zinc-500 mt-0.5">
             Chief of Staff • 6CE PE

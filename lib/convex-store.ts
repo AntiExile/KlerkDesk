@@ -117,11 +117,22 @@ export function evaluateComplianceSummary(
   };
 }
 
+interface StoredConvexMessage {
+  bidId?: string;
+  role: 'user' | 'assistant';
+  content: string;
+  contentType: 'text' | 'code' | 'table' | 'markdown';
+  modelUsed?: string;
+  approvalId?: string;
+  createdAt: string;
+}
+
 interface LocalConvexFallbackStore {
   complianceDocs: ComplianceDoc[];
   tenders: TenderMatch[];
   boqsByTender: Record<string, BoQItem[]>;
   approvals: ApprovalShieldState[];
+  messages: StoredConvexMessage[];
   settings: ContractorSettings;
 }
 
@@ -401,6 +412,7 @@ function createSeedStore(): LocalConvexFallbackStore {
     tenders,
     boqsByTender,
     approvals: [],
+    messages: [],
     settings,
   };
 }
@@ -828,4 +840,44 @@ export async function updateContractorSettings(
     ...patch,
   };
   return store.settings;
+}
+
+export async function appendConvexMessage(input: {
+  bidId?: string;
+  role: 'user' | 'assistant';
+  content: string;
+  contentType?: 'text' | 'code' | 'table' | 'markdown';
+  modelUsed?: string;
+  approvalId?: string;
+}): Promise<void> {
+  const contentType = input.contentType ?? 'text';
+  const store = getFallbackStore();
+  store.messages = [
+    ...store.messages,
+    {
+      bidId: input.bidId,
+      role: input.role,
+      content: input.content,
+      contentType,
+      modelUsed: input.modelUsed,
+      approvalId: input.approvalId,
+      createdAt: new Date().toISOString(),
+    },
+  ];
+
+  const client = getConvexHttpClient();
+  if (client) {
+    try {
+      await client.mutation(api.tenderOps.appendMessage, {
+        bidId: input.bidId,
+        role: input.role,
+        content: input.content,
+        contentType,
+        modelUsed: input.modelUsed,
+        approvalId: input.approvalId,
+      });
+    } catch (err) {
+      console.warn('[Convex] appendMessage mutation fallback:', err);
+    }
+  }
 }

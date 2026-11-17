@@ -60,7 +60,7 @@ const QUICK_ACTIONS: QuickAction[] = [
   },
   {
     id: 'ask-compliance',
-    title: 'Ask Mundus Ops About Today’s Scan',
+    title: 'Ask KlerkDesk About Today’s Scan',
     description: 'Query DeepSeek v4 Flash on municipal deadlines and compliance flags',
     icon: <Sparkles className="size-4" />,
   },
