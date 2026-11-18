@@ -2,9 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   KLERK_MASCOT_VARIANTS,
+  THREAD_MASCOT_VARIANTS,
   clampUnit,
+  deriveTenderThreadMood,
   deriveWorkspaceMascotMood,
+  getTenderMascotVariant,
   normalizeLookTarget,
+  resolveTenderMascotVariants,
 } from './mascot';
 import type { ComplianceDoc } from '@/types';
 
@@ -139,4 +143,32 @@ test('deriveWorkspaceMascotMood enforces strict priority ordering', () => {
     }),
     'idle'
   );
+});
+
+test('resolveTenderMascotVariants assigns unique characters per tender thread deterministically', () => {
+  const ids = [
+    'ET-2026-WC-0842',
+    'ET-2026-WC-0911',
+    'ET-2026-WC-1044',
+    'ET-2026-CPT-2201',
+  ];
+  const mapA = resolveTenderMascotVariants(ids);
+  const mapB = resolveTenderMascotVariants(ids);
+  assert.deepEqual(mapA, mapB);
+
+  const assigned = Object.values(mapA);
+  assert.equal(new Set(assigned).size, ids.length);
+  for (const variant of assigned) {
+    assert.ok(THREAD_MASCOT_VARIANTS.includes(variant));
+  }
+
+  assert.equal(getTenderMascotVariant('ET-2026-WC-0911', ids), mapA['ET-2026-WC-0911']);
+  assert.ok(THREAD_MASCOT_VARIANTS.includes(getTenderMascotVariant('solo-tender')));
+});
+
+test('deriveTenderThreadMood maps tender status to mascot mood', () => {
+  assert.equal(deriveTenderThreadMood('submitted'), 'approved');
+  assert.equal(deriveTenderThreadMood('pending_approval'), 'waiting_approval');
+  assert.equal(deriveTenderThreadMood('staging'), 'scanning');
+  assert.equal(deriveTenderThreadMood('matched'), 'idle');
 });

@@ -61,11 +61,13 @@ export const getWorkspaceState = query({
               .withIndex('by_userId_bidId', (q) =>
                 q.eq('userId', userId).eq('bidId', args.bidId!)
               )
-              .take(100)
+              .order('desc')
+              .take(200)
           : ctx.db
               .query('messages')
               .withIndex('by_userId', (q) => q.eq('userId', userId))
-              .take(100),
+              .order('desc')
+              .take(200),
         args.bidId
           ? ctx.db
               .query('boqItems')
@@ -73,7 +75,10 @@ export const getWorkspaceState = query({
                 q.eq('userId', userId).eq('tenderId', args.bidId!)
               )
               .take(200)
-          : Promise.resolve([]),
+          : ctx.db
+              .query('boqItems')
+              .withIndex('by_userId', (q) => q.eq('userId', userId))
+              .take(500),
         ctx.db
           .query('usageLedger')
           .withIndex('by_userId_month', (q) =>
@@ -122,7 +127,7 @@ export const getWorkspaceState = query({
       tenders,
       boqItems,
       approvals,
-      messages,
+      messages: [...messages].reverse(),
       usageSummary: {
         month,
         promptTokens,

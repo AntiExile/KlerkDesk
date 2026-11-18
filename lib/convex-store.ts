@@ -1,3 +1,4 @@
+import { cache } from 'react';
 import { ConvexHttpClient } from 'convex/browser';
 import { makeFunctionReference } from 'convex/server';
 import { api } from '@/convex/_generated/api';
@@ -28,6 +29,7 @@ import type {
   ComplianceSummary,
   ContractorSettings,
   DirectorInfo,
+  Message,
   PlanTier,
   SourceCitation,
   SubmissionChannel,
@@ -86,7 +88,7 @@ export function getConvexHttpClient(): ConvexHttpClient {
   return new ConvexHttpClient(url);
 }
 
-export async function requireAuthenticatedConvex(): Promise<{
+async function fetchAuthenticatedConvex(): Promise<{
   client: ConvexHttpClient;
   user: NonNullable<Awaited<ReturnType<ConvexHttpClient['query']>>> & {
     _id: Id<'users'>;
@@ -125,9 +127,20 @@ export async function requireAuthenticatedConvex(): Promise<{
   return {
     client,
     user: currentUser as Awaited<
-      ReturnType<typeof requireAuthenticatedConvex>
+      ReturnType<typeof fetchAuthenticatedConvex>
     >['user'],
   };
+}
+
+const getCachedAuthenticatedConvex = cache(fetchAuthenticatedConvex);
+
+export async function requireAuthenticatedConvex(options?: {
+  fresh?: boolean;
+}) {
+  if (options?.fresh) {
+    return fetchAuthenticatedConvex();
+  }
+  return getCachedAuthenticatedConvex();
 }
 
 function mapConvexDocsToSummary(
@@ -290,6 +303,39 @@ function mapConvexApprovalRow(row: {
   };
 }
 
+function mapConvexMessageRow(row: {
+  _id: string | Id<'messages'>;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+  contentType: 'text' | 'code' | 'table' | 'markdown';
+  modelUsed?: string;
+  sources?: Array<{
+    sourceTitle?: string;
+    filePath: string;
+    textSnippet: string;
+    pageNumber?: number;
+    score?: number;
+  }>;
+}): Message {
+  return {
+    id: String(row._id),
+    role: row.role,
+    content: row.content,
+    timestamp: new Date(row.createdAt),
+    contentType: row.contentType,
+    modelUsed: row.modelUsed,
+    sources: row.sources?.map((s, idx) => ({
+      id: `${String(row._id)}-src-${idx}`,
+      sourceTitle: s.sourceTitle,
+      filePath: s.filePath,
+      textSnippet: s.textSnippet,
+      pageNumber: s.pageNumber,
+      score: s.score,
+    })),
+  };
+}
+
 export async function uploadBytesToConvexStorage(
   client: ConvexHttpClient,
   bytes: Uint8Array,
@@ -381,9 +427,15 @@ export async function upsertComplianceDoc(input: {
   return getComplianceSummary();
 }
 
-export async function getTenderMatches(): Promise<TenderMatch[]> {
+export async function getTenderMatches(
+  existingSummary?: ComplianceSummary
+): Promise<TenderMatch[]> {
   const { client, user } = await requireAuthenticatedConvex();
   try {
+    if (existingSummary) {
+      const rows = await client.query(api.tenders.listTenderMatches, {});
+      return rows.map((row) => mapConvexTenderRow(row, existingSummary));
+    }
     const [rows, docs] = await Promise.all([
       client.query(api.tenders.listTenderMatches, {}),
       client.query(api.compliance.getComplianceVault, {}),
@@ -393,8 +445,31 @@ export async function getTenderMatches(): Promise<TenderMatch[]> {
   } catch (err) {
     if (!isUnpushedConvexError(err)) throw err;
     const ws = await client.query(api.tenderOps.getWorkspaceState, {});
-    const summary = mapConvexDocsToSummary(ws.docs, user.isDemo);
+    const summary =
+      existingSummary ?? mapConvexDocsToSummary(ws.docs, user.isDemo);
     return ws.tenders.map((row) => mapConvexTenderRow(row, summary));
+  }
+}
+
+export async function getComplianceVaultAndTenders(): Promise<{
+  compliance: ComplianceSummary;
+  tenders: TenderMatch[];
+}> {
+  const { client, user } = await requireAuthenticatedConvex();
+  try {
+    const [docs, rows] = await Promise.all([
+      client.query(api.compliance.getComplianceVault, {}),
+      client.query(api.tenders.listTenderMatches, {}),
+    ]);
+    const compliance = mapConvexDocsToSummary(docs, user.isDemo);
+    const tenders = rows.map((row) => mapConvexTenderRow(row, compliance));
+    return { compliance, tenders };
+  } catch (err) {
+    if (!isUnpushedConvexError(err)) throw err;
+    const ws = await client.query(api.tenderOps.getWorkspaceState, {});
+    const compliance = mapConvexDocsToSummary(ws.docs, user.isDemo);
+    const tenders = ws.tenders.map((row) => mapConvexTenderRow(row, compliance));
+    return { compliance, tenders };
   }
 }
 
@@ -476,7 +551,7 @@ export async function triggerPortalTenderScan(
   );
 
   if (liveResult.tenders.length === 0) {
-    return getTenderMatches();
+    return getTenderMatches(compliance);
   }
 
   const boqGroups = Object.entries(liveResult.boqsByTender).map(
@@ -523,7 +598,7 @@ export async function triggerPortalTenderScan(
       boqGroups,
       replaceActive: true,
     });
-    return getTenderMatches();
+    return getTenderMatches(compliance);
   } catch (err) {
     if (!isUnpushedConvexError(err)) throw err;
     return liveResult.tenders;
@@ -535,6 +610,7 @@ export async function getTenderById(id: string): Promise<{
   boq: BoQItem[];
   compliance: ComplianceSummary;
   approvals: ApprovalShieldState[];
+  messages: Message[];
 }> {
   const { client, user } = await requireAuthenticatedConvex();
   try {
@@ -560,7 +636,9 @@ export async function getTenderById(id: string): Promise<{
       .map(mapConvexApprovalRow)
       .sort((a, b) => b.requestedAt.localeCompare(a.requestedAt));
 
-    return { tender, boq, compliance, approvals };
+    const messages: Message[] = workspace.messages.map(mapConvexMessageRow);
+
+    return { tender, boq, compliance, approvals, messages };
   } catch (err) {
     if (!isUnpushedConvexError(err)) throw err;
     const ws = await client.query(api.tenderOps.getWorkspaceState, {
@@ -582,7 +660,8 @@ export async function getTenderById(id: string): Promise<{
     const approvals: ApprovalShieldState[] = ws.approvals
       .map(mapConvexApprovalRow)
       .sort((a, b) => b.requestedAt.localeCompare(a.requestedAt));
-    return { tender, boq, compliance, approvals };
+    const messages: Message[] = ws.messages.map(mapConvexMessageRow);
+    return { tender, boq, compliance, approvals, messages };
   }
 }
 
@@ -952,8 +1031,10 @@ export async function recordAiUsage(params: {
   }
 }
 
-export async function getContractorSettings(): Promise<ContractorSettings> {
-  const { user } = await requireAuthenticatedConvex();
+export async function getContractorSettings(
+  fresh = false
+): Promise<ContractorSettings> {
+  const { user } = await requireAuthenticatedConvex({ fresh });
   const usage = await getMonthlyUsageSummary();
 
   const isLegacy =
@@ -1038,7 +1119,7 @@ export async function updateContractorSettings(
     directors: patch.directors,
   });
 
-  return getContractorSettings();
+  return getContractorSettings(true);
 }
 
 export async function appendConvexMessage(input: {

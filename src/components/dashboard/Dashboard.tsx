@@ -10,7 +10,7 @@ import {
   type ChangeEvent,
 } from 'react';
 import { useRouter } from 'next/navigation';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   Plus,
   ArrowUp,
@@ -29,7 +29,11 @@ import { SettingsModal } from '@/components/settings/SettingsModal';
 import { ModelSetupModal } from '@/components/ModelSetupModal';
 import { LiveSandboxDrawer } from '@/components/bid/LiveSandboxDrawer';
 import { KlerkMascot } from '@/components/KlerkMascot';
-import { deriveWorkspaceMascotMood } from '@/lib/mascot';
+import {
+  deriveTenderThreadMood,
+  deriveWorkspaceMascotMood,
+  getTenderMascotVariant,
+} from '@/lib/mascot';
 import { api } from '@/convex/_generated/api';
 import {
   useResolveApprovalShieldMutation,
@@ -68,6 +72,7 @@ interface DashboardProps {
   activeTender?: TenderMatch;
   initialBoq?: BoQItem[];
   initialApprovals?: ApprovalShieldState[];
+  initialMessages?: Message[];
   defaultVaultModalOpen?: boolean;
   defaultSandboxDrawerOpen?: boolean;
 }
@@ -78,37 +83,67 @@ export function Dashboard({
   activeTender,
   initialBoq = [],
   initialApprovals = [],
+  initialMessages = [],
   defaultVaultModalOpen = false,
   defaultSandboxDrawerOpen = false,
 }: DashboardProps) {
   const router = useRouter();
+  const [activeBidId, setActiveBidId] = useState<string | null>(
+    activeTender?.id ?? null
+  );
+
+  useEffect(() => {
+    setActiveBidId(activeTender?.id ?? null);
+  }, [activeTender?.id]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handlePopState = () => {
+      const match = window.location.pathname.match(/^\/bid\/([^/?#]+)/);
+      if (match?.[1]) {
+        setActiveBidId(decodeURIComponent(match[1]));
+        setIsSandboxOpen(true);
+      } else {
+        setActiveBidId(null);
+        setIsSandboxOpen(false);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
   const {
     compliance,
     tenders,
     boqItems: liveBoqItems,
     approvals,
+    messages: workspaceMessages,
+    messagesHydrated,
     stagedPdf,
   } = useTenderWorkspaceQuery({
-    bidId: activeTender?.id,
+    bidId: activeBidId ?? undefined,
     initialCompliance,
     initialTenders,
     initialBoq,
     initialApprovals,
+    initialMessages,
   });
 
   const triggerApproval = useTriggerApprovalShieldMutation();
   const resolveApproval = useResolveApprovalShieldMutation();
   const runPortalScan = useRunPortalScanMutation();
 
-  const selectedTender =
-    tenders.find((t) => t.id === activeTender?.id) ?? activeTender ?? tenders[0];
-  const [boqItems, setBoqItems] = useState<BoQItem[]>(
-    liveBoqItems.length > 0 ? liveBoqItems : initialBoq
-  );
+  const resolvedActiveTender = activeBidId
+    ? tenders.find((t) => t.id === activeBidId) ??
+      (activeTender?.id === activeBidId ? activeTender : undefined)
+    : undefined;
+  const selectedTender = resolvedActiveTender ?? tenders[0];
+  const currentThreadKey = selectedTender?.id ?? '__desk__';
+  const [boqItems, setBoqItems] = useState<BoQItem[]>(liveBoqItems);
 
   useEffect(() => {
-    setBoqItems(liveBoqItems.length > 0 ? liveBoqItems : initialBoq);
-  }, [activeTender?.id, initialBoq, liveBoqItems]);
+    setBoqItems(liveBoqItems);
+  }, [liveBoqItems]);
 
   const { isAuthenticated } = useConvexAuth();
   const currentUser = useQuery(
@@ -185,7 +220,22 @@ export function Dashboard({
     }
   }, [currentUser?._id, currentUser?.cidbGrade, currentUser?.municipalRegions]);
 
-  const [messages, setMessages] = useState<Message[]>([]);
+  const messagesCacheRef = useRef<Record<string, Message[]>>({});
+  const fetchedThreadsRef = useRef<Set<string>>(new Set());
+  const prevThreadKeyRef = useRef<string>(currentThreadKey);
+  const activeThreadKeyRef = useRef<string>(currentThreadKey);
+  activeThreadKeyRef.current = currentThreadKey;
+
+  const [messages, setMessagesState] = useState<Message[]>(() => {
+    if (initialMessages.length > 0) {
+      messagesCacheRef.current[currentThreadKey] = initialMessages;
+      return initialMessages;
+    }
+    return workspaceMessages;
+  });
+  const messagesRef = useRef<Message[]>(messages);
+  messagesRef.current = messages;
+
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [isDraggingPdf, setIsDraggingPdf] = useState(false);
@@ -194,22 +244,142 @@ export function Dashboard({
   const scrollEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const updateThreadMessages = useCallback(
+    (
+      threadKey: string,
+      updater: Message[] | ((prev: Message[]) => Message[])
+    ) => {
+      const base =
+        messagesCacheRef.current[threadKey] ??
+        (activeThreadKeyRef.current === threadKey ? messagesRef.current : []);
+      const next = typeof updater === 'function' ? updater(base) : updater;
+      messagesCacheRef.current[threadKey] = next;
+      if (activeThreadKeyRef.current === threadKey) {
+        setMessagesState(next);
+      }
+    },
+    []
+  );
+
+  const setMessages = useCallback(
+    (updater: Message[] | ((prev: Message[]) => Message[])) => {
+      updateThreadMessages(activeThreadKeyRef.current, updater);
+    },
+    [updateThreadMessages]
+  );
+
+  const handleSelectTender = useCallback(
+    (nextBidId: string | null, options?: { openSandbox?: boolean }) => {
+      if (nextBidId === activeBidId) {
+        if (options?.openSandbox) {
+          setIsSandboxOpen(true);
+        }
+        return;
+      }
+
+      const previousBidId = activeBidId;
+      setActiveBidId(nextBidId);
+
+      if (nextBidId === null) {
+        setIsSandboxOpen(false);
+      } else if (options?.openSandbox !== undefined) {
+        setIsSandboxOpen(options.openSandbox);
+      } else if (previousBidId === null) {
+        setIsSandboxOpen(true);
+      }
+
+      if (typeof window !== 'undefined') {
+        const nextPath = nextBidId
+          ? `/bid/${encodeURIComponent(nextBidId)}`
+          : '/desk';
+        if (window.location.pathname !== nextPath) {
+          window.history.pushState({ bidId: nextBidId }, '', nextPath);
+        }
+      }
+    },
+    [activeBidId]
+  );
+
   useEffect(() => {
-    if (!isAuthenticated) return;
+    const threadSwitched = prevThreadKeyRef.current !== currentThreadKey;
+    prevThreadKeyRef.current = currentThreadKey;
+    const cached = messagesCacheRef.current[currentThreadKey];
+
+    if (threadSwitched) {
+      if (cached) {
+        setMessagesState(cached);
+        return;
+      }
+      if (messagesHydrated) {
+        messagesCacheRef.current[currentThreadKey] = workspaceMessages;
+        setMessagesState(workspaceMessages);
+        return;
+      }
+      setMessagesState([]);
+    } else if (
+      !isStreaming &&
+      workspaceMessages.length > 0 &&
+      (!cached || workspaceMessages.length > cached.length)
+    ) {
+      const merged = workspaceMessages.map((wm, idx) => {
+        const existing = cached?.[idx];
+        if (
+          existing &&
+          existing.role === wm.role &&
+          existing.content === wm.content
+        ) {
+          return {
+            ...wm,
+            thinkingSteps: existing.thinkingSteps ?? wm.thinkingSteps,
+            thinkingDuration: existing.thinkingDuration ?? wm.thinkingDuration,
+            actionApproval: existing.actionApproval ?? wm.actionApproval,
+          };
+        }
+        return wm;
+      });
+      messagesCacheRef.current[currentThreadKey] = merged;
+      setMessagesState(merged);
+      return;
+    }
+
+    if (
+      !isAuthenticated ||
+      messagesHydrated ||
+      cached ||
+      fetchedThreadsRef.current.has(currentThreadKey)
+    ) {
+      return;
+    }
+
+    fetchedThreadsRef.current.add(currentThreadKey);
+    const targetBidId = selectedTender?.id;
+    const targetKey = currentThreadKey;
     let cancelled = false;
-    void getPersistedMessagesAction(selectedTender?.id)
+
+    void getPersistedMessagesAction(targetBidId)
       .then((persisted) => {
         if (!cancelled) {
-          setMessages(persisted);
+          messagesCacheRef.current[targetKey] = persisted;
+          if (activeThreadKeyRef.current === targetKey) {
+            setMessagesState(persisted);
+          }
         }
       })
       .catch(() => {
-        // Keep current thread state if initial hydration fails
+        fetchedThreadsRef.current.delete(targetKey);
       });
+
     return () => {
       cancelled = true;
     };
-  }, [isAuthenticated, selectedTender?.id]);
+  }, [
+    currentThreadKey,
+    isAuthenticated,
+    isStreaming,
+    messagesHydrated,
+    selectedTender?.id,
+    workspaceMessages,
+  ]);
 
   const openVault = useCallback((docType: ComplianceDocType | null = null) => {
     setVaultDocType(docType);
@@ -221,6 +391,8 @@ export function Dashboard({
       const trimmed = promptText.trim();
       if (!trimmed || isStreaming) return;
 
+      const requestThreadKey = activeThreadKeyRef.current;
+      const targetTender = selectedTender;
       setIsStreaming(true);
 
       const userMsg: Message = {
@@ -241,7 +413,11 @@ export function Dashboard({
         isThinking: true,
       };
 
-      setMessages((prev) => [...prev, userMsg, pendingAi]);
+      updateThreadMessages(requestThreadKey, (prev) => [
+        ...prev,
+        userMsg,
+        pendingAi,
+      ]);
       setInput('');
       setDroppedFileName(null);
 
@@ -250,33 +426,33 @@ export function Dashboard({
       try {
         const res = await askTenderQuestionAction({
           prompt: trimmed,
-          bidId: selectedTender?.id,
+          bidId: targetTender?.id,
           mode,
         });
 
         let shieldApprovalId: string | undefined;
-        if (res.requiresApprovalShield && selectedTender) {
+        if (res.requiresApprovalShield && targetTender) {
           const subtotal =
             boqItems.length > 0
               ? boqItems.reduce((s, r) => s + r.quantity * r.rateZar, 0)
-              : selectedTender.estimatedValueZar;
+              : targetTender.estimatedValueZar;
           const vat = Math.round(subtotal * 0.15 * 100) / 100;
           const grand = Math.round((subtotal + vat) * 100) / 100;
 
           const created = await triggerApproval({
-            bidId: selectedTender.id,
-            tenderNumber: selectedTender.tenderNumber,
+            bidId: targetTender.id,
+            tenderNumber: targetTender.tenderNumber,
             actionType: 'submit_etenders',
             totalBidZar: subtotal,
             vatZar: vat,
             grandTotalZar: grand,
-            targetResource: selectedTender.portalUrl,
-            commandPreview: `stagehand.submitBid({ tender: "${selectedTender.tenderNumber}", total: "${formatSpacedRand(grand)}" })`,
+            targetResource: targetTender.portalUrl,
+            commandPreview: `stagehand.submitBid({ tender: "${targetTender.tenderNumber}", total: "${formatSpacedRand(grand)}" })`,
           });
           shieldApprovalId = created.id;
         }
 
-        setMessages((prev) =>
+        updateThreadMessages(requestThreadKey, (prev) =>
           prev.map((m) =>
             m.id === aiMsgId
               ? {
@@ -290,10 +466,10 @@ export function Dashboard({
                   actionApproval: shieldApprovalId
                     ? {
                         id: shieldApprovalId,
-                        title: `Approval Shield — ${selectedTender?.tenderNumber}`,
+                        title: `Approval Shield — ${targetTender?.tenderNumber}`,
                         description:
                           'Paused in Convex pendingApprovals. Sign off when ready.',
-                        targetResource: selectedTender?.portalUrl,
+                        targetResource: targetTender?.portalUrl,
                         riskLevel: compliance.isBidReady ? 'low' : 'high',
                         confidenceScore: 0.96,
                         status: 'pending',
@@ -304,7 +480,7 @@ export function Dashboard({
           )
         );
       } catch (err) {
-        setMessages((prev) =>
+        updateThreadMessages(requestThreadKey, (prev) =>
           prev.map((m) =>
             m.id === aiMsgId
               ? {
@@ -323,7 +499,14 @@ export function Dashboard({
         setTimeout(() => scrollEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 60);
       }
     },
-    [boqItems, compliance.isBidReady, isStreaming, selectedTender, triggerApproval]
+    [
+      boqItems,
+      compliance.isBidReady,
+      isStreaming,
+      selectedTender,
+      triggerApproval,
+      updateThreadMessages,
+    ]
   );
 
   const executePortalScanWithPreferences = useCallback(
@@ -442,10 +625,10 @@ export function Dashboard({
         e.preventDefault();
         if (tenders.length === 0) {
           router.push('/onboarding');
-        } else if (activeTender) {
+        } else if (resolvedActiveTender) {
           setIsSandboxOpen(true);
         } else if (selectedTender) {
-          router.push(`/bid/${selectedTender.id}`);
+          handleSelectTender(selectedTender.id, { openSandbox: true });
         }
       } else if (key === 'c') {
         e.preventDefault();
@@ -463,12 +646,13 @@ export function Dashboard({
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
-    activeTender,
+    handleSelectTender,
     handleTriggerPortalScan,
     isCommandPaletteOpen,
     isSettingsOpen,
     isVaultOpen,
     openVault,
+    resolvedActiveTender,
     router,
     selectedTender,
     sendConversationalPrompt,
@@ -485,6 +669,8 @@ export function Dashboard({
   const uploadTenderPdfFile = useCallback(
     async (file: File) => {
       if (isStreaming) return;
+      const requestThreadKey = activeThreadKeyRef.current;
+      const targetTenderId = selectedTender?.id;
       setDroppedFileName(file.name);
       setIsStreaming(true);
 
@@ -506,18 +692,22 @@ export function Dashboard({
         isThinking: true,
       };
 
-      setMessages((prev) => [...prev, userMsg, pendingAi]);
+      updateThreadMessages(requestThreadKey, (prev) => [
+        ...prev,
+        userMsg,
+        pendingAi,
+      ]);
       setTimeout(() => scrollEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 40);
 
       try {
         const formData = new FormData();
         formData.append('file', file);
-        if (selectedTender?.id) {
-          formData.append('bidId', selectedTender.id);
+        if (targetTenderId) {
+          formData.append('bidId', targetTenderId);
         }
 
         const res = await uploadAndIndexTenderPdfAction(formData);
-        setMessages((prev) =>
+        updateThreadMessages(requestThreadKey, (prev) =>
           prev.map((m) =>
             m.id === aiMsgId
               ? {
@@ -533,7 +723,7 @@ export function Dashboard({
           )
         );
       } catch (err) {
-        setMessages((prev) =>
+        updateThreadMessages(requestThreadKey, (prev) =>
           prev.map((m) =>
             m.id === aiMsgId
               ? {
@@ -553,7 +743,7 @@ export function Dashboard({
         setTimeout(() => scrollEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 60);
       }
     },
-    [isStreaming, selectedTender?.id]
+    [isStreaming, selectedTender?.id, updateThreadMessages]
   );
 
   const handleDropPdf = (e: DragEvent<HTMLFormElement>) => {
@@ -611,10 +801,10 @@ export function Dashboard({
           title: `Inspect ${selectedTender ? getShortTenderLabel(selectedTender) : 'Active Bid'} BoQ & Approval Shield`,
           subtitle: `Waiting on your yes • ${formatSpacedRand(selectedTender?.estimatedValueZar ?? 14_850_000)} • CIDB ${selectedTender?.cidbGrade ?? '6CE'}`,
           onClick: () => {
-            if (activeTender) {
+            if (resolvedActiveTender) {
               setIsSandboxOpen(true);
             } else if (selectedTender) {
-              router.push(`/bid/${selectedTender.id}`);
+              handleSelectTender(selectedTender.id, { openSandbox: true });
             }
           },
         },
@@ -670,11 +860,12 @@ export function Dashboard({
         <Sidebar
           compliance={compliance}
           tenders={tenders}
-          activeBidId={activeTender?.id}
+          activeBidId={resolvedActiveTender?.id ?? null}
           workspaceMood={workspaceMood}
           sortBy={savedScanPrefs?.sortBy ?? 'best_match'}
           isResorting={isSortingTenders}
           onChangeSortBy={(nextSort) => void handleChangeSortOrder(nextSort)}
+          onSelectTender={(bidId) => handleSelectTender(bidId)}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onOpenVaultModal={() => openVault(null)}
           onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
@@ -685,59 +876,73 @@ export function Dashboard({
       </div>
 
       {/* Mobile Sidebar Overlay */}
-      {mobileSidebarOpen && (
-        <div
-          className="fixed inset-0 z-40 md:hidden flex bg-black/70 backdrop-blur-sm"
-          onClick={() => setMobileSidebarOpen(false)}
-        >
-          <div
-            className="h-full relative"
-            onClick={(e) => e.stopPropagation()}
+      <AnimatePresence>
+        {mobileSidebarOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 z-40 md:hidden flex bg-black/70 backdrop-blur-sm"
+            onClick={() => setMobileSidebarOpen(false)}
           >
-            <Sidebar
-              compliance={compliance}
-              tenders={tenders}
-              activeBidId={activeTender?.id}
-              workspaceMood={workspaceMood}
-              sortBy={savedScanPrefs?.sortBy ?? 'best_match'}
-              isResorting={isSortingTenders}
-              onChangeSortBy={(nextSort) => void handleChangeSortOrder(nextSort)}
-              onOpenSettings={() => {
-                setMobileSidebarOpen(false);
-                setIsSettingsOpen(true);
-              }}
-              onOpenVaultModal={() => {
-                setMobileSidebarOpen(false);
-                openVault(null);
-              }}
-              onOpenCommandPalette={() => {
-                setMobileSidebarOpen(false);
-                setIsCommandPaletteOpen(true);
-              }}
-              onOpenLiveSandbox={() => {
-                setMobileSidebarOpen(false);
-                setIsSandboxOpen(true);
-              }}
-              onTriggerNewScan={() => {
-                setMobileSidebarOpen(false);
-                void handleTriggerPortalScan();
-              }}
-              onOpenSectorPreferences={() => {
-                setMobileSidebarOpen(false);
-                setIsScanModalOpen(true);
-              }}
-            />
-            <button
-              type="button"
-              onClick={() => setMobileSidebarOpen(false)}
-              aria-label="Close sidebar"
-              className="absolute top-3 right-[-42px] size-8 rounded-full bg-[#18181B] border border-white/10 flex items-center justify-center text-zinc-300 cursor-pointer"
+            <motion.div
+              initial={{ x: '-100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '-100%' }}
+              transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+              className="h-full relative will-change-transform"
+              onClick={(e) => e.stopPropagation()}
             >
-              <X className="size-4" />
-            </button>
-          </div>
-        </div>
-      )}
+              <Sidebar
+                compliance={compliance}
+                tenders={tenders}
+                activeBidId={resolvedActiveTender?.id ?? null}
+                workspaceMood={workspaceMood}
+                sortBy={savedScanPrefs?.sortBy ?? 'best_match'}
+                isResorting={isSortingTenders}
+                onChangeSortBy={(nextSort) => void handleChangeSortOrder(nextSort)}
+                onSelectTender={(bidId) => {
+                  setMobileSidebarOpen(false);
+                  handleSelectTender(bidId);
+                }}
+                onOpenSettings={() => {
+                  setMobileSidebarOpen(false);
+                  setIsSettingsOpen(true);
+                }}
+                onOpenVaultModal={() => {
+                  setMobileSidebarOpen(false);
+                  openVault(null);
+                }}
+                onOpenCommandPalette={() => {
+                  setMobileSidebarOpen(false);
+                  setIsCommandPaletteOpen(true);
+                }}
+                onOpenLiveSandbox={() => {
+                  setMobileSidebarOpen(false);
+                  setIsSandboxOpen(true);
+                }}
+                onTriggerNewScan={() => {
+                  setMobileSidebarOpen(false);
+                  void handleTriggerPortalScan();
+                }}
+                onOpenSectorPreferences={() => {
+                  setMobileSidebarOpen(false);
+                  setIsScanModalOpen(true);
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => setMobileSidebarOpen(false)}
+                aria-label="Close sidebar"
+                className="absolute top-3 right-[-42px] size-8 rounded-full bg-[#18181B] border border-white/10 flex items-center justify-center text-zinc-300 cursor-pointer"
+              >
+                <X className="size-4" />
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Main Centered Stream Canvas (70%+ negative space around max-w-2xl) */}
       <div className="flex-1 flex flex-col min-w-0 h-dvh relative">
@@ -757,14 +962,25 @@ export function Dashboard({
           {/* Clean Centered Title */}
           <div className="inline-flex items-center gap-2 text-xs font-medium text-zinc-300 truncate max-w-[280px] sm:max-w-md">
             <KlerkMascot
-              variant="chief"
-              size={24}
+              variant={
+                resolvedActiveTender
+                  ? getTenderMascotVariant(
+                      resolvedActiveTender.id,
+                      tenders.map((t) => t.id)
+                    )
+                  : 'chief'
+              }
+              size={resolvedActiveTender ? 28 : 32}
               followCursor={false}
-              mood={workspaceMood}
+              mood={
+                resolvedActiveTender
+                  ? deriveTenderThreadMood(resolvedActiveTender.status)
+                  : workspaceMood
+              }
             />
             <span className="truncate">
-              {activeTender
-                ? `KlerkDesk · ${getShortTenderLabel(activeTender)}`
+              {resolvedActiveTender
+                ? `KlerkDesk · ${getShortTenderLabel(resolvedActiveTender)}`
                 : 'KlerkDesk'}
             </span>
           </div>
@@ -867,13 +1083,13 @@ export function Dashboard({
                     transition={{ ...bubbleSpring, delay: 0.1 }}
                     className="max-w-xl bg-[#1C1C1F] border border-white/[0.06] rounded-2xl px-4 py-3 text-[13.5px] leading-relaxed text-zinc-200"
                   >
-                    {activeTender ? (
+                    {resolvedActiveTender ? (
                       <>
                         You’re looking at{' '}
                         <span className="font-medium text-zinc-100">
-                          {getShortTenderLabel(activeTender)}
+                          {getShortTenderLabel(resolvedActiveTender)}
                         </span>{' '}
-                        (<span className="font-mono">{activeTender.tenderNumber}</span>).{' '}
+                        (<span className="font-mono">{resolvedActiveTender.tenderNumber}</span>).{' '}
                         {bubble3Copy}
                       </>
                     ) : (
@@ -1144,6 +1360,7 @@ export function Dashboard({
         isOpen={isCommandPaletteOpen}
         onClose={() => setIsCommandPaletteOpen(false)}
         activeTender={selectedTender}
+        onSelectTender={(bidId) => handleSelectTender(bidId, { openSandbox: true })}
         onOpenComplianceUploader={() => openVault('csd')}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenLiveSandbox={() => setIsSandboxOpen(true)}

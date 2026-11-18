@@ -3,7 +3,7 @@
 import { z } from 'zod';
 import {
   getComplianceSummary,
-  getTenderMatches,
+  getComplianceVaultAndTenders,
   requireAuthenticatedConvex,
   triggerPortalTenderScan,
   upsertComplianceDoc,
@@ -38,11 +38,7 @@ export async function getComplianceVaultAction(): Promise<{
   tenders: TenderMatch[];
 }> {
   await requireAuthenticatedConvex();
-  const [compliance, tenders] = await Promise.all([
-    getComplianceSummary(),
-    getTenderMatches(),
-  ]);
-  return { compliance, tenders };
+  return getComplianceVaultAndTenders();
 }
 
 export async function uploadComplianceDocAction(

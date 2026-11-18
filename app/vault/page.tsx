@@ -21,6 +21,7 @@ export default async function VaultPage() {
       initialTenders={tenders}
       initialBoq={topBid?.boq ?? []}
       initialApprovals={topBid?.approvals ?? []}
+      initialMessages={topBid?.messages ?? []}
       defaultVaultModalOpen={true}
     />
   );

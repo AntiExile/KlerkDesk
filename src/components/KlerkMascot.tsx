@@ -10,7 +10,11 @@ import {
   type KlerkMascotVariant,
 } from '@/lib/mascot';
 
-export type { KlerkMascotMood, KlerkMascotVariant } from '@/lib/mascot';
+export type {
+  KlerkMascotMood,
+  KlerkMascotVariant,
+  ThreadMascotVariant,
+} from '@/lib/mascot';
 
 export interface KlerkMascotProps {
   mood?: KlerkMascotMood;
@@ -27,7 +31,7 @@ function buildKlerkDefinition(variant: KlerkMascotVariant): MascotDefinition {
     name: 'Klerk',
     shape: preset.shape,
     color: preset.color,
-    eyeShape: 'capsule',
+    eyeShape: preset.eyeShape ?? 'capsule',
     eyeColor: preset.eyeColor,
     stageColor: '#0A0A0B',
     renderMode: 'projected-3d',

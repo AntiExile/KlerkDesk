@@ -5,6 +5,7 @@ import type {
   ApprovalShieldState,
   BoQItem,
   ComplianceSummary,
+  Message,
   TenderMatch,
 } from '@/types';
 
@@ -14,6 +15,7 @@ interface BidRoomClientProps {
   initialBoq: BoQItem[];
   initialCompliance: ComplianceSummary;
   initialApprovals: ApprovalShieldState[];
+  initialMessages?: Message[];
 }
 
 export function BidRoomClient({
@@ -22,6 +24,7 @@ export function BidRoomClient({
   initialBoq,
   initialCompliance,
   initialApprovals,
+  initialMessages = [],
 }: BidRoomClientProps) {
   return (
     <Dashboard
@@ -30,6 +33,7 @@ export function BidRoomClient({
       activeTender={initialTender}
       initialBoq={initialBoq}
       initialApprovals={initialApprovals}
+      initialMessages={initialMessages}
       defaultSandboxDrawerOpen={true}
     />
   );

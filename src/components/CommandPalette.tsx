@@ -20,6 +20,7 @@ interface CommandPaletteProps {
   isOpen: boolean;
   onClose: () => void;
   activeTender?: TenderMatch;
+  onSelectTender?: (tenderId: string) => void;
   onOpenComplianceUploader?: () => void;
   onOpenSettings?: () => void;
   onAskPrompt?: (prompt: string) => void;
@@ -87,6 +88,7 @@ export function CommandPalette({
   isOpen,
   onClose,
   activeTender,
+  onSelectTender,
   onOpenComplianceUploader,
   onOpenSettings,
   onAskPrompt,
@@ -123,7 +125,11 @@ export function CommandPalette({
       switch (action.id) {
         case 'open-bid':
           if (activeTender) {
-            router.push(`/bid/${activeTender.id}`);
+            if (onSelectTender) {
+              onSelectTender(activeTender.id);
+            } else {
+              router.push(`/bid/${activeTender.id}`);
+            }
           } else {
             router.push('/onboarding');
           }
@@ -159,6 +165,7 @@ export function CommandPalette({
       onOpenComplianceUploader,
       onOpenLiveSandbox,
       onOpenSettings,
+      onSelectTender,
       router,
     ]
   );

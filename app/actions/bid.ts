@@ -29,6 +29,7 @@ import type {
   BoatSessionInfo,
   BoQItem,
   ComplianceSummary,
+  Message,
   TenderMatch,
 } from '@/types';
 
@@ -69,6 +70,7 @@ export async function getBidWorkspaceAction(bidId: string): Promise<{
   boq: BoQItem[];
   compliance: ComplianceSummary;
   approvals: ApprovalShieldState[];
+  messages: Message[];
 }> {
   await requireAuthenticatedConvex();
   return getTenderById(bidId);

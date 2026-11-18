@@ -21,6 +21,7 @@ export default async function DeskPage() {
       initialTenders={tenders}
       initialBoq={topBid?.boq ?? []}
       initialApprovals={topBid?.approvals ?? []}
+      initialMessages={topBid?.messages ?? []}
     />
   );
 }

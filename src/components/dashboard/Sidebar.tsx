@@ -1,6 +1,13 @@
 'use client';
 
-import { useState, useRef, useEffect, type FormEvent } from 'react';
+import {
+  useState,
+  useRef,
+  useEffect,
+  useMemo,
+  type FormEvent,
+  type MouseEvent as ReactMouseEvent,
+} from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuthActions } from '@convex-dev/auth/react';
@@ -25,6 +32,10 @@ import { saveContractorSettingsAction } from '@/app/actions/settings';
 import { resetClientWorkspaceSnapshot } from '@/lib/convex-react';
 import { formatMillionsRand, formatShortClosingDate, getShortTenderLabel } from '@/lib/format';
 import { TENDER_SORT_OPTIONS, type TenderSortOption } from '@/lib/etenders-live';
+import {
+  deriveTenderThreadMood,
+  resolveTenderMascotVariants,
+} from '@/lib/mascot';
 import { KlerkMascot, type KlerkMascotMood } from '@/components/KlerkMascot';
 import type { ComplianceSummary, TenderMatch } from '@/types';
 
@@ -33,11 +44,12 @@ const DEMO_USERNAME = 'demo@mundusmk.co.za';
 interface SidebarProps {
   compliance: ComplianceSummary;
   tenders: TenderMatch[];
-  activeBidId?: string;
+  activeBidId?: string | null;
   workspaceMood?: KlerkMascotMood;
   sortBy?: TenderSortOption;
   isResorting?: boolean;
   onChangeSortBy?: (sortBy: TenderSortOption) => void;
+  onSelectTender?: (tenderId: string | null) => void;
   onOpenSettings: () => void;
   onOpenVaultModal: () => void;
   onOpenCommandPalette: () => void;
@@ -46,12 +58,9 @@ interface SidebarProps {
   onOpenSectorPreferences?: () => void;
 }
 
-const TENDER_GEOMETRIC_STYLES = [
-  'bg-amber-500/15 text-amber-300 border-amber-400/20',
-  'bg-emerald-500/15 text-emerald-300 border-emerald-400/20',
-  'bg-sky-500/15 text-sky-300 border-sky-400/20',
-  'bg-violet-500/15 text-violet-300 border-violet-400/20',
-];
+function isPlainLeftClick(e: ReactMouseEvent<HTMLAnchorElement>): boolean {
+  return !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && e.button === 0;
+}
 
 function getTenderThreadSubtitle(tender: TenderMatch, idx: number): string {
   const value = formatMillionsRand(tender.estimatedValueZar);
@@ -75,6 +84,7 @@ export function Sidebar({
   sortBy = 'best_match',
   isResorting = false,
   onChangeSortBy,
+  onSelectTender,
   onOpenSettings,
   onOpenVaultModal,
   onOpenCommandPalette,
@@ -185,6 +195,10 @@ export function Sidebar({
   const uploadedDocsCount = compliance.docs.filter(
     (d) => d.status !== 'missing'
   ).length;
+  const threadMascots = useMemo(
+    () => resolveTenderMascotVariants(tenders.map((t) => t.id)),
+    [tenders]
+  );
   const attentionCount = compliance.blockingAlerts.length;
   const vaultChips = [
     { key: 'tax_pin', label: 'Tax' },
@@ -293,10 +307,16 @@ export function Sidebar({
       <div className="px-3 pb-4">
         <Link
           href="/desk"
+          onClick={(e) => {
+            if (onSelectTender && isPlainLeftClick(e)) {
+              e.preventDefault();
+              onSelectTender(null);
+            }
+          }}
           className="block rounded-2xl bg-[#18181B]/80 hover:bg-[#1C1C1F] border border-white/[0.06] p-3.5 text-center transition-colors no-underline"
         >
           <div className="mx-auto flex items-center justify-center">
-            <KlerkMascot variant="chief" size={52} mood={workspaceMood} />
+            <KlerkMascot variant="chief" size={68} mood={workspaceMood} />
           </div>
           <div className="mt-1.5 text-xs font-medium text-zinc-100">
             KlerkDesk
@@ -363,15 +383,23 @@ export function Sidebar({
           </div>
         ) : (
           tenders.map((tender, idx) => {
-            const isCurrent = activeBidId === tender.id || pathname === `/bid/${tender.id}`;
-            const geometricStyle =
-              TENDER_GEOMETRIC_STYLES[idx % TENDER_GEOMETRIC_STYLES.length];
+            const isCurrent = onSelectTender
+              ? activeBidId === tender.id
+              : activeBidId === tender.id || pathname === `/bid/${tender.id}`;
+            const threadVariant = threadMascots[tender.id] ?? 'thread_emerald';
+            const threadMood = deriveTenderThreadMood(tender.status);
             const subtitle = getTenderThreadSubtitle(tender, idx);
 
             return (
               <Link
                 key={tender.id}
                 href={`/bid/${tender.id}`}
+                onClick={(e) => {
+                  if (onSelectTender && isPlainLeftClick(e)) {
+                    e.preventDefault();
+                    onSelectTender(tender.id);
+                  }
+                }}
                 className={`flex items-start gap-2.5 px-2.5 py-2 rounded-xl transition-colors no-underline ${
                   isCurrent
                     ? 'bg-[#1C1C1F] border border-white/[0.07]'
@@ -379,9 +407,19 @@ export function Sidebar({
                 }`}
               >
                 <span
-                  className={`mt-0.5 size-6 rounded-lg border flex items-center justify-center shrink-0 text-[10px] font-semibold ${geometricStyle}`}
+                  className={`mt-0.5 size-8 rounded-xl border flex items-center justify-center shrink-0 transition-colors ${
+                    isCurrent
+                      ? 'bg-[#232328] border-white/15'
+                      : 'bg-[#161619] border-white/[0.06]'
+                  }`}
                 >
-                  {idx % 2 === 0 ? '◆' : '●'}
+                  <KlerkMascot
+                    variant={threadVariant}
+                    mood={threadMood}
+                    size={24}
+                    followCursor={false}
+                    interactiveClick={false}
+                  />
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="text-xs font-medium text-zinc-200 truncate">

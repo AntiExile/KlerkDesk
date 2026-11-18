@@ -9,6 +9,7 @@
  */
 
 import type * as auth from "../auth.js";
+import type * as authHelpers from "../authHelpers.js";
 import type * as bid from "../bid.js";
 import type * as chat from "../chat.js";
 import type * as compliance from "../compliance.js";
@@ -25,6 +26,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
+  authHelpers: typeof authHelpers;
   bid: typeof bid;
   chat: typeof chat;
   compliance: typeof compliance;

@@ -42,6 +42,7 @@ import type {
   ComplianceDoc,
   ComplianceDocType,
   ComplianceSummary,
+  Message,
   SubmissionChannel,
   TenderMatch,
   UsageSummary,
@@ -52,8 +53,10 @@ interface ReactiveWorkspaceSnapshot {
   tenders: TenderMatch[];
   boqsByTender: Record<string, BoQItem[]>;
   approvalsByTender: Record<string, ApprovalShieldState[]>;
+  messagesByThread: Record<string, Message[]>;
   stagedPdfsByTender: Record<string, StampedSbdResult>;
   usageSummary: UsageSummary | null;
+  workspaceSynced: boolean;
 }
 
 const listeners = new Set<() => void>();
@@ -63,8 +66,10 @@ let clientSnapshot: ReactiveWorkspaceSnapshot = {
   tenders: [],
   boqsByTender: {},
   approvalsByTender: {},
+  messagesByThread: {},
   stagedPdfsByTender: {},
   usageSummary: null,
+  workspaceSynced: false,
 };
 
 function emitChange() {
@@ -86,10 +91,118 @@ export function resetClientWorkspaceSnapshot() {
     tenders: [],
     boqsByTender: {},
     approvalsByTender: {},
+    messagesByThread: {},
     stagedPdfsByTender: {},
     usageSummary: null,
+    workspaceSynced: false,
   };
   emitChange();
+}
+
+function mapConvexBoqItem(row: {
+  itemId: string;
+  itemCode: string;
+  section: string;
+  description: string;
+  unit: string;
+  quantity: number;
+  rateZar: number;
+  amountZar: number;
+}): BoQItem {
+  return {
+    id: row.itemId,
+    itemCode: row.itemCode,
+    section: row.section,
+    description: row.description,
+    unit: row.unit,
+    quantity: row.quantity,
+    rateZar: row.rateZar,
+    amountZar: row.amountZar,
+  };
+}
+
+function mapConvexApproval(apr: {
+  approvalId: string;
+  bidId: string;
+  tenderNumber: string;
+  actionType: ApprovalActionType;
+  status: 'pending_approval' | 'approved' | 'rejected' | 'executed';
+  totalBidZar: number;
+  vatZar: number;
+  grandTotalZar: number;
+  targetResource: string;
+  commandPreview: string;
+  complianceVerified: boolean;
+  complianceWarnings: string[];
+  requestedBy: string;
+  requestedAt: string;
+  approvedBy?: string | null;
+  approvedAt?: string | null;
+  boatSessionId?: string | null;
+  mergedPackStorageId?: unknown;
+  mergedPackUrl?: string;
+  submissionChannel?: string;
+  whatsappDispatched?: boolean;
+}): ApprovalShieldState {
+  return {
+    id: apr.approvalId,
+    bidId: apr.bidId,
+    tenderNumber: apr.tenderNumber,
+    actionType: apr.actionType,
+    status: apr.status,
+    totalBidZar: apr.totalBidZar,
+    vatZar: apr.vatZar,
+    grandTotalZar: apr.grandTotalZar,
+    targetResource: apr.targetResource,
+    commandPreview: apr.commandPreview,
+    complianceVerified: apr.complianceVerified,
+    complianceWarnings: apr.complianceWarnings,
+    requestedBy: apr.requestedBy,
+    requestedAt: apr.requestedAt,
+    approvedBy: apr.approvedBy ?? null,
+    approvedAt: apr.approvedAt ?? null,
+    boatSessionId: apr.boatSessionId ?? null,
+    mergedPackStorageId: apr.mergedPackStorageId
+      ? String(apr.mergedPackStorageId)
+      : undefined,
+    mergedPackUrl: apr.mergedPackUrl,
+    submissionChannel: apr.submissionChannel,
+    whatsappDispatched: apr.whatsappDispatched,
+  };
+}
+
+function mapConvexMessage(row: {
+  _id: unknown;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+  contentType: 'text' | 'code' | 'table' | 'markdown';
+  modelUsed?: string;
+  sources?: Array<{
+    sourceTitle?: string;
+    filePath: string;
+    textSnippet: string;
+    pageNumber?: number;
+    score?: number;
+  }>;
+}): Message {
+  const id = String(row._id);
+  return {
+    id,
+    role: row.role,
+    content: row.content,
+    timestamp: new Date(row.createdAt),
+    contentType: row.contentType,
+    modelUsed: row.modelUsed,
+    sources: row.sources?.map((s, idx) => ({
+      id: `${id}-src-${idx}`,
+      sourceTitle: s.sourceTitle,
+      filePath: s.filePath,
+      textSnippet: s.textSnippet,
+      pageNumber: s.pageNumber,
+      score: s.score,
+    })),
+  };
 }
 
 function subscribeSnapshot(listener: () => void) {
@@ -295,31 +408,7 @@ function ConvexLiveBridge() {
 
     const groupedApprovals: Record<string, ApprovalShieldState[]> = {};
     for (const apr of liveState.approvals) {
-      const mapped: ApprovalShieldState = {
-        id: apr.approvalId,
-        bidId: apr.bidId,
-        tenderNumber: apr.tenderNumber,
-        actionType: apr.actionType,
-        status: apr.status,
-        totalBidZar: apr.totalBidZar,
-        vatZar: apr.vatZar,
-        grandTotalZar: apr.grandTotalZar,
-        targetResource: apr.targetResource,
-        commandPreview: apr.commandPreview,
-        complianceVerified: apr.complianceVerified,
-        complianceWarnings: apr.complianceWarnings,
-        requestedBy: apr.requestedBy,
-        requestedAt: apr.requestedAt,
-        approvedBy: apr.approvedBy ?? null,
-        approvedAt: apr.approvedAt ?? null,
-        boatSessionId: apr.boatSessionId ?? null,
-        mergedPackStorageId: apr.mergedPackStorageId
-          ? String(apr.mergedPackStorageId)
-          : undefined,
-        mergedPackUrl: apr.mergedPackUrl,
-        submissionChannel: apr.submissionChannel,
-        whatsappDispatched: apr.whatsappDispatched,
-      };
+      const mapped = mapConvexApproval(apr);
       if (!groupedApprovals[apr.bidId]) {
         groupedApprovals[apr.bidId] = [];
       }
@@ -331,15 +420,41 @@ function ConvexLiveBridge() {
       );
     }
 
+    const groupedBoqs: Record<string, BoQItem[]> = {};
+    for (const item of liveState.boqItems) {
+      if (!groupedBoqs[item.tenderId]) {
+        groupedBoqs[item.tenderId] = [];
+      }
+      groupedBoqs[item.tenderId].push(mapConvexBoqItem(item));
+    }
+
+    const groupedMessages: Record<string, Message[]> = {};
+    for (const msg of liveState.messages) {
+      const threadKey = msg.bidId || '__desk__';
+      if (!groupedMessages[threadKey]) {
+        groupedMessages[threadKey] = [];
+      }
+      groupedMessages[threadKey].push(mapConvexMessage(msg));
+    }
+
     setClientSnapshot((prev) => ({
       ...prev,
       compliance: evaluatedSummary,
       tenders: mappedTenders,
+      boqsByTender:
+        Object.keys(groupedBoqs).length > 0
+          ? { ...prev.boqsByTender, ...groupedBoqs }
+          : prev.boqsByTender,
       approvalsByTender:
         Object.keys(groupedApprovals).length > 0
           ? { ...prev.approvalsByTender, ...groupedApprovals }
           : prev.approvalsByTender,
+      messagesByThread:
+        Object.keys(groupedMessages).length > 0
+          ? { ...prev.messagesByThread, ...groupedMessages }
+          : prev.messagesByThread,
       usageSummary: liveState.usageSummary ?? prev.usageSummary,
+      workspaceSynced: true,
     }));
   }, [isAuthenticated, liveState, currentUser]);
 
@@ -373,24 +488,38 @@ export function useHydrateConvexWorkspace(params: {
   bidId?: string;
   boq?: BoQItem[];
   approvals?: ApprovalShieldState[];
+  messages?: Message[];
 }) {
   useEffect(() => {
+    const hydrateBidKey = params.bidId ?? params.tenders[0]?.id;
+    const threadKey = hydrateBidKey || '__desk__';
     setClientSnapshot((prev) => ({
       ...prev,
       compliance: prev.compliance ?? params.compliance,
       tenders: prev.tenders.length > 0 ? prev.tenders : params.tenders,
       boqsByTender:
-        params.bidId && params.boq && !prev.boqsByTender[params.bidId]
-          ? { ...prev.boqsByTender, [params.bidId]: params.boq }
+        hydrateBidKey && params.boq && !prev.boqsByTender[hydrateBidKey]
+          ? { ...prev.boqsByTender, [hydrateBidKey]: params.boq }
           : prev.boqsByTender,
       approvalsByTender:
-        params.bidId &&
+        hydrateBidKey &&
         params.approvals &&
-        !prev.approvalsByTender[params.bidId]
-          ? { ...prev.approvalsByTender, [params.bidId]: params.approvals }
+        !prev.approvalsByTender[hydrateBidKey]
+          ? { ...prev.approvalsByTender, [hydrateBidKey]: params.approvals }
           : prev.approvalsByTender,
+      messagesByThread:
+        params.messages && !prev.messagesByThread[threadKey]
+          ? { ...prev.messagesByThread, [threadKey]: params.messages }
+          : prev.messagesByThread,
     }));
-  }, [params.approvals, params.bidId, params.boq, params.compliance, params.tenders]);
+  }, [
+    params.approvals,
+    params.bidId,
+    params.boq,
+    params.compliance,
+    params.messages,
+    params.tenders,
+  ]);
 }
 
 export function useComplianceVaultQuery(
@@ -419,40 +548,88 @@ export function useTenderWorkspaceQuery(params: {
   initialTenders: TenderMatch[];
   initialBoq?: BoQItem[];
   initialApprovals?: ApprovalShieldState[];
+  initialMessages?: Message[];
 }) {
   const store = useSyncExternalStore(
     subscribeSnapshot,
     getClientSnapshot,
     getClientSnapshot
   );
+  const { isAuthenticated } = useConvexAuth();
+  const initialBidIdRef = useRef(params.bidId);
 
   useHydrateConvexWorkspace({
     compliance: params.initialCompliance,
     tenders: params.initialTenders,
-    bidId: params.bidId,
+    bidId: initialBidIdRef.current,
     boq: params.initialBoq,
     approvals: params.initialApprovals,
+    messages: params.initialMessages,
   });
 
+  const activeTenders =
+    store.tenders.length > 0 ? store.tenders : params.initialTenders;
+  const bidKey = params.bidId ?? activeTenders[0]?.id ?? '';
+  const bidWorkspace = useConvexQuery(
+    api.bid.getBidWorkspace,
+    isAuthenticated && bidKey ? { bidId: bidKey } : 'skip'
+  );
+
   return useMemo(() => {
-    const activeTenders =
-      store.tenders.length > 0 ? store.tenders : params.initialTenders;
-    const bidKey = params.bidId ?? activeTenders[0]?.id ?? '';
+    const threadKey = bidKey || '__desk__';
+    const initialTargetKey =
+      initialBidIdRef.current ?? params.initialTenders[0]?.id ?? '__desk__';
+    const isInitialTarget = threadKey === initialTargetKey;
+    const liveBoq = bidWorkspace?.boqItems
+      ? bidWorkspace.boqItems.map(mapConvexBoqItem)
+      : undefined;
+    const liveApprovals = bidWorkspace?.approvals
+      ? bidWorkspace.approvals
+          .map(mapConvexApproval)
+          .sort((a, b) => b.requestedAt.localeCompare(a.requestedAt))
+      : undefined;
+    const liveMessages = bidWorkspace?.messages
+      ? bidWorkspace.messages.map(mapConvexMessage)
+      : undefined;
+
+    const cachedMessages =
+      liveMessages ??
+      store.messagesByThread[threadKey] ??
+      (isInitialTarget ? params.initialMessages : undefined);
+
     return {
       compliance: store.compliance ?? params.initialCompliance,
       tenders: activeTenders,
-      boqItems: bidKey ? (store.boqsByTender[bidKey] ?? params.initialBoq ?? []) : [],
-      approvals: bidKey
-        ? (store.approvalsByTender[bidKey] ?? params.initialApprovals ?? [])
+      boqItems: bidKey
+        ? (liveBoq ??
+          store.boqsByTender[bidKey] ??
+          (isInitialTarget ? params.initialBoq : undefined) ??
+          [])
         : [],
+      approvals: bidKey
+        ? (liveApprovals ??
+          store.approvalsByTender[bidKey] ??
+          (isInitialTarget ? params.initialApprovals : undefined) ??
+          [])
+        : [],
+      messages: cachedMessages ?? [],
+      messagesHydrated: Boolean(
+        liveMessages !== undefined ||
+          store.messagesByThread[threadKey] !== undefined ||
+          store.workspaceSynced ||
+          (isInitialTarget && params.initialMessages !== undefined)
+      ),
       stagedPdf: bidKey ? (store.stagedPdfsByTender[bidKey] ?? null) : null,
       usageSummary: store.usageSummary,
     };
   }, [
-    params.bidId,
+    activeTenders,
+    bidKey,
+    bidWorkspace,
     params.initialApprovals,
     params.initialBoq,
     params.initialCompliance,
+    params.initialMessages,
     params.initialTenders,
     store,
   ]);

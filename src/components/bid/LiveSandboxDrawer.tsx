@@ -104,6 +104,17 @@ export function LiveSandboxDrawer({
   );
 
   useEffect(() => {
+    setBoatSession(null);
+    setRemainingSeconds(600);
+    setBoqSaved(false);
+    setApprovalError(null);
+    setIsStartingVm(false);
+    setIsStamping(false);
+    setIsSavingBoq(false);
+    setIsStagingApproval(false);
+  }, [tender.id]);
+
+  useEffect(() => {
     if (!boatSession || boatSession.status !== 'running') return;
     const timer = setInterval(() => {
       setRemainingSeconds((prev) => (prev > 0 ? prev - 1 : 0));
@@ -218,15 +229,22 @@ export function LiveSandboxDrawer({
   const latestApproval = approvals[0] ?? null;
 
   return (
-    <AnimatePresence>
+    <AnimatePresence initial={false}>
       {isOpen && (
-        <motion.aside
-          initial={{ opacity: 0, x: 36 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: 36 }}
-          transition={{ type: 'spring', stiffness: 400, damping: 34 }}
-          className="fixed inset-y-0 right-0 z-30 lg:static w-full sm:w-[480px] xl:w-[540px] h-dvh bg-[#111113] border-l border-white/[0.06] flex flex-col shrink-0 shadow-2xl shadow-black/80"
+        <motion.div
+          initial={{ width: 0 }}
+          animate={{ width: 'var(--drawer-w)' }}
+          exit={{ width: 0 }}
+          transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+          className="fixed inset-y-0 right-0 z-30 lg:relative lg:z-auto h-dvh shrink-0 overflow-hidden [--drawer-w:100vw] sm:[--drawer-w:480px] xl:[--drawer-w:540px]"
         >
+          <motion.aside
+            initial={{ x: '100%', opacity: 0.5 }}
+            animate={{ x: '0%', opacity: 1 }}
+            exit={{ x: '100%', opacity: 0.5 }}
+            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+            className="w-screen sm:w-[480px] xl:w-[540px] h-dvh bg-[#111113] border-l border-white/[0.06] flex flex-col shrink-0 shadow-2xl shadow-black/80 will-change-transform"
+          >
           {/* Drawer Header */}
           <div className="px-4 py-3 border-b border-white/[0.06] flex items-center justify-between gap-2 shrink-0">
             <div className="min-w-0">
@@ -636,7 +654,8 @@ export function LiveSandboxDrawer({
               )}
             </section>
           </div>
-        </motion.aside>
+          </motion.aside>
+        </motion.div>
       )}
     </AnimatePresence>
   );

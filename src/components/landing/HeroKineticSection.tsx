@@ -10,15 +10,11 @@ import {
 } from 'framer-motion';
 import {
   ArrowRight,
-  Bot,
   Check,
   CheckCircle2,
-  FileCheck2,
   Lock,
-  MessageSquareCheck,
   Pause,
   Play,
-  Radar,
   Search,
   Send,
   ShieldAlert,
@@ -32,7 +28,11 @@ import {
   type ShowcaseScenario,
 } from './showcase-data';
 import { RotatingAutopilotPhrase } from './RotatingAutopilotPhrase';
-import { KlerkMascot, type KlerkMascotMood } from '@/components/KlerkMascot';
+import {
+  KlerkMascot,
+  type KlerkMascotMood,
+  type KlerkMascotVariant,
+} from '@/components/KlerkMascot';
 
 interface ExtraChatMessage {
   id: string;
@@ -40,11 +40,11 @@ interface ExtraChatMessage {
   text: string;
 }
 
-const SCENARIO_ICONS: Record<string, typeof Bot> = {
-  'chief-of-staff': Bot,
-  'tender-scout': Radar,
-  'compliance-guard': FileCheck2,
-  'approval-shield': MessageSquareCheck,
+const SCENARIO_MASCOTS: Record<string, KlerkMascotVariant> = {
+  'chief-of-staff': 'chief',
+  'tender-scout': 'thread_amber',
+  'compliance-guard': 'thread_violet',
+  'approval-shield': 'thread_sky',
 };
 
 export function HeroKineticSection() {
@@ -143,7 +143,8 @@ export function HeroKineticSection() {
 
   const isApproved = Boolean(approvedIds[activeScenario.id]);
   const extraMessages = extraMessagesByScenario[activeScenario.id] ?? [];
-  const ActiveBotIcon = SCENARIO_ICONS[activeScenario.id] ?? Bot;
+  const activeMascotVariant: KlerkMascotVariant =
+    SCENARIO_MASCOTS[activeScenario.id] ?? 'chief';
 
   return (
     <MotionConfig reducedMotion="user">
@@ -200,7 +201,7 @@ export function HeroKineticSection() {
               transition={{ duration: 4.4, repeat: Infinity, ease: 'easeInOut' }}
               className="mb-1 flex items-center justify-center"
             >
-              <KlerkMascot variant="chief" size={88} mood={heroMood} />
+              <KlerkMascot variant="chief" size={104} mood={heroMood} />
             </motion.div>
 
             <div className="relative flex flex-col items-center">
@@ -365,7 +366,8 @@ export function HeroKineticSection() {
                           (s) => s.id === scenario.id
                         );
                         const isSelected = scenario.id === activeScenario.id;
-                        const Icon = SCENARIO_ICONS[scenario.id] ?? Bot;
+                        const mascotVariant: KlerkMascotVariant =
+                          SCENARIO_MASCOTS[scenario.id] ?? 'chief';
 
                         return (
                           <button
@@ -389,11 +391,16 @@ export function HeroKineticSection() {
                               <span
                                 className={`size-8 rounded-lg border flex items-center justify-center shrink-0 transition-colors ${
                                   isSelected
-                                    ? 'bg-emerald-500/15 border-emerald-400/30 text-emerald-400'
-                                    : 'bg-[#161619] border-white/[0.07] text-zinc-400'
+                                    ? 'bg-emerald-500/15 border-emerald-400/30'
+                                    : 'bg-[#161619] border-white/[0.07]'
                                 }`}
                               >
-                                <Icon className="size-4" />
+                                <KlerkMascot
+                                  variant={mascotVariant}
+                                  size={mascotVariant === 'chief' ? 26 : 22}
+                                  followCursor={false}
+                                  interactiveClick={false}
+                                />
                               </span>
                               <div className="min-w-0 flex-1">
                                 <div className="flex items-center justify-between gap-1">
@@ -431,8 +438,13 @@ export function HeroKineticSection() {
                 {/* Top Active Agent Bar + Selectable Bot Avatars */}
                 <div className="px-5 py-3.5 border-b border-white/[0.06] bg-[#101012] flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <span className="size-8 rounded-xl bg-emerald-500/15 border border-emerald-400/30 flex items-center justify-center text-emerald-400 shrink-0">
-                      <ActiveBotIcon className="size-4" />
+                    <span className="size-8 rounded-xl bg-emerald-500/15 border border-emerald-400/30 flex items-center justify-center shrink-0">
+                      <KlerkMascot
+                        variant={activeMascotVariant}
+                        size={activeMascotVariant === 'chief' ? 28 : 24}
+                        followCursor={false}
+                        interactiveClick={false}
+                      />
                     </span>
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
@@ -457,7 +469,8 @@ export function HeroKineticSection() {
                     className="flex items-center gap-1.5"
                   >
                     {SHOWCASE_SCENARIOS.map((scenario, idx) => {
-                      const Icon = SCENARIO_ICONS[scenario.id] ?? Bot;
+                      const mascotVariant: KlerkMascotVariant =
+                        SCENARIO_MASCOTS[scenario.id] ?? 'chief';
                       const selected = idx === activeIndex;
                       return (
                         <button
@@ -469,11 +482,16 @@ export function HeroKineticSection() {
                           onClick={() => selectScenario(idx)}
                           className={`size-8 rounded-full border flex items-center justify-center cursor-pointer transition-all ${
                             selected
-                              ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300 scale-105'
-                              : 'bg-[#18181B] border-white/10 text-zinc-400 hover:text-zinc-200 hover:border-white/20'
+                              ? 'bg-emerald-500/20 border-emerald-400 scale-105'
+                              : 'bg-[#18181B] border-white/10 hover:border-white/20'
                           }`}
                         >
-                          <Icon className="size-3.5" />
+                          <KlerkMascot
+                            variant={mascotVariant}
+                            size={mascotVariant === 'chief' ? 22 : 18}
+                            followCursor={false}
+                            interactiveClick={false}
+                          />
                         </button>
                       );
                     })}

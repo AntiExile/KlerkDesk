@@ -32,6 +32,7 @@ export default async function BidPage({ params }: BidPageProps) {
       initialBoq={workspace.boq}
       initialCompliance={workspace.compliance}
       initialApprovals={workspace.approvals}
+      initialMessages={workspace.messages}
     />
   );
 }
