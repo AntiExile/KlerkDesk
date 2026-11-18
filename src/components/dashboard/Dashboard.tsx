@@ -536,7 +536,7 @@ export function Dashboard({
         .join(', ');
       const provinceNames = prefs.provinces.join(', ');
       void sendConversationalPrompt(
-        `Scanned live National Treasury eTenders for ${sectorNames} opportunities in ${provinceNames} (${matched.length} matching tenders pulled into Tender Threads). Summarize the top match and required returnables.`
+        `Scanned live National Treasury eTenders for ${sectorNames} opportunities in ${provinceNames} (${matched.length} matching tenders pulled into Klerk Desks). Summarize the top match and required returnables.`
       );
     },
     [currentUser?._id, runPortalScan, sendConversationalPrompt]
@@ -835,7 +835,7 @@ export function Dashboard({
         {
           key: 'C',
           title: 'Scan eTenders & Municipal Portals for matching bids',
-          subtitle: 'Populate your Tender Threads with live South African opportunities',
+          subtitle: 'Populate your Klerk Desks with live South African opportunities',
           onClick: () => void handleTriggerPortalScan(),
         },
       ];

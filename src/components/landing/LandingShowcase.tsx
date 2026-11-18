@@ -109,7 +109,7 @@ export function LandingShowcase() {
 
             <div className="space-y-1">
               <div className="px-2 text-[10px] font-medium uppercase tracking-wider text-zinc-600">
-                Active Tender Threads
+                Active Klerk Desks
               </div>
               {DEMO_THREADS.map((thread) => {
                 const isSelected = thread.id === active.id;

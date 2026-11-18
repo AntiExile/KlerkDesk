@@ -1,16 +1,39 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { PDFDocument, StandardFonts, rgb, type PDFPage } from 'pdf-lib';
-import { extractText } from 'unpdf';
-import type { ComplianceDoc, DirectorInfo, SubmissionChannel } from '@/types';
+import {
+  PDFCheckBox,
+  PDFDocument,
+  PDFTextField,
+  StandardFonts,
+  rgb,
+  type PDFFont,
+  type PDFPage,
+} from 'pdf-lib';
+import { extractText, getDocumentProxy } from 'unpdf';
+import {
+  PPR_2022_THRESHOLD_ZAR,
+  buildSbd4Disclosures,
+  calculatePpr2022Points,
+  type Ppr2022CalculationResult,
+  type Sbd4DisclosuresResult,
+  type SpecificGoalInput,
+} from '@/lib/compliance-forms';
+import type { DirectorInfo, SubmissionChannel } from '@/types';
+
+export { PPR_2022_THRESHOLD_ZAR };
 
 export const MAX_SUBMISSION_PACK_BYTES = 30 * 1024 * 1024;
-export const PPR_2022_THRESHOLD_ZAR = 50_000_000;
 
 export interface SbdStampPayload {
   tenderId: string;
   tenderNumber: string;
+  tenderTitle?: string;
   municipality: string;
+  organOfState?: string;
+  buyerName?: string;
+  submissionChannel?: SubmissionChannel | string;
+  closingDate?: string;
+  closingTime?: string;
   companyName: string;
   registrationNumber: string;
   csdMaaaNumber: string;
@@ -18,6 +41,21 @@ export interface SbdStampPayload {
   cidbGrade: string;
   bbbeeLevel: string;
   grandTotalZar: number;
+  postalAddress?: string;
+  streetAddress?: string;
+  telephoneNumber?: string;
+  cellphoneNumber?: string;
+  emailAddress?: string;
+  vatRegistrationNumber?: string;
+  municipalAccountNumber?: string;
+  signatoryName?: string;
+  signatoryIdNumber?: string;
+  signatoryCapacity?: string;
+  connectedPersonDetails?: string;
+  hasConnectedPersons?: boolean;
+  accreditedRepresentative?: boolean;
+  foreignSupplier?: boolean;
+  specificGoals?: SpecificGoalInput[];
   directors?: DirectorInfo[];
   returnablePdfBuffers?: Uint8Array[];
 }
@@ -69,6 +107,20 @@ export interface MergedSubmissionPackResult {
   attachmentsIncluded: number;
 }
 
+export interface ReturnableTemplateRoutingInput {
+  submissionChannel?: SubmissionChannel | string | null;
+  organOfState?: string | null;
+  buyerName?: string | null;
+  municipality?: string | null;
+}
+
+export type ReturnableTemplateName =
+  | 'sbd1.pdf'
+  | 'sbd4.pdf'
+  | 'sbd6_1.pdf'
+  | 'mbd1.pdf'
+  | 'mbd6_1.pdf';
+
 interface CoordinateEntry {
   x: number;
   y: number;
@@ -87,18 +139,79 @@ interface CleanReturnableSpec {
   declaration: string;
 }
 
-interface SbdFormConfig {
+interface FormStampSlot {
   label: string;
-  candidatePaths: string[];
+  templateFile: ReturnableTemplateName;
   flatCoordinates: CoordinateEntry[];
   cleanSheet: CleanReturnableSpec;
 }
+
+interface AcroFieldDataBundle {
+  textMap: Record<string, string>;
+  checkboxMap: Record<string, boolean>;
+}
+
+const MUNICIPAL_INDICATOR_RE =
+  /municipality|munisipaliteit|district|metro|mbd/i;
 
 function formatRand(amount: number): string {
   return `R ${amount.toLocaleString('en-ZA', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
+}
+
+export function extractCsdDigits(csdMaaaNumber: string): string {
+  return (csdMaaaNumber || '')
+    .trim()
+    .replace(/^MAAA/i, '')
+    .replace(/\D+/g, '');
+}
+
+export function deriveSignatoryInitials(
+  signatoryName: string | undefined,
+  companyName: string
+): string {
+  const source = (signatoryName || '').trim() || companyName.trim() || 'KD';
+  const words = source
+    .replace(/[^a-zA-Z\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 0);
+  if (words.length >= 2) {
+    return `${words[0][0].toUpperCase()}.${words[words.length - 1][0].toUpperCase()}.`;
+  }
+  if (words.length === 1) {
+    return `${words[0].slice(0, 2).toUpperCase()}.`;
+  }
+  return 'K.D.';
+}
+
+/**
+ * Automatically selects Municipal (`MBD`) returnable templates when submitting
+ * to municipal channels/entities, or National/Provincial (`SBD`) templates
+ * for PFMA departments and SOCs.
+ */
+export function resolveReturnableTemplates(
+  tender: ReturnableTemplateRoutingInput
+): [ReturnableTemplateName, ReturnableTemplateName, ReturnableTemplateName] {
+  const channel = (tender.submissionChannel ?? '').trim().toLowerCase();
+  const organText = [
+    tender.organOfState,
+    tender.buyerName,
+    tender.municipality,
+  ]
+    .filter((v): v is string => Boolean(v && v.trim()))
+    .join(' ');
+
+  const isMunicipal =
+    channel === 'municipal_email' ||
+    channel === 'physical_tender_box' ||
+    channel === 'tender_box' ||
+    MUNICIPAL_INDICATOR_RE.test(organText);
+
+  return isMunicipal
+    ? ['mbd1.pdf', 'sbd4.pdf', 'mbd6_1.pdf']
+    : ['sbd1.pdf', 'sbd4.pdf', 'sbd6_1.pdf'];
 }
 
 export function computePreferencePointsSystem(
@@ -109,84 +222,46 @@ export function computePreferencePointsSystem(
   maxPoints: number;
   claimedPoints: number;
 } {
-  const isNinetyTen = grandTotalZar > PPR_2022_THRESHOLD_ZAR;
-  const maxPoints = isNinetyTen ? 10 : 20;
-  const systemLabel = isNinetyTen
-    ? '90/10 (Acquisitions above R 50,000,000.00 — PPR 2022)'
-    : '80/20 (Acquisitions up to R 50,000,000.00 — PPR 2022)';
-
-  const lower = bbbeeLevel.toLowerCase();
-  const levelMatch = lower.match(/level\s*([1-8])/i);
-  const level = levelMatch
-    ? Number(levelMatch[1])
-    : lower.includes('eme') || lower.includes('exempt')
-      ? 1
-      : lower.includes('qse')
-        ? 2
-        : 0;
-
-  const points8020: Record<number, number> = {
-    1: 20,
-    2: 18,
-    3: 14,
-    4: 12,
-    5: 8,
-    6: 6,
-    7: 4,
-    8: 2,
+  const ppr = calculatePpr2022Points(grandTotalZar, bbbeeLevel);
+  return {
+    systemLabel: ppr.systemLabel,
+    maxPoints: ppr.maxPoints,
+    claimedPoints: ppr.claimedPoints,
   };
-  const points9010: Record<number, number> = {
-    1: 10,
-    2: 9,
-    3: 6,
-    4: 5,
-    5: 4,
-    6: 3,
-    7: 2,
-    8: 1,
-  };
-
-  const claimedPoints = isNinetyTen
-    ? (points9010[level] ?? 0)
-    : (points8020[level] ?? 0);
-
-  return { systemLabel, maxPoints, claimedPoints };
 }
 
-function buildSbd4DirectorRows(
-  directors: DirectorInfo[] | undefined
+function buildSbd4FallbackRows(
+  directors: DirectorInfo[] | undefined,
+  disclosures: Sbd4DisclosuresResult
 ): CleanReturnableRow[] {
   if (!directors || directors.length === 0) {
     return [
       {
-        label: 'DIRECTORS DISCLOSED (SCM 12/2026):',
+        label: 'DIRECTORS DISCLOSED (SCM 14/2026):',
         value: 'Pending Director Schedule — update Directors under Contractor Settings',
       },
       {
-        label: 'ORGAN OF STATE EMPLOYMENT:',
-        value: 'NO — None declared by bidder directors',
+        label: 'ORGAN OF STATE EMPLOYMENT (2.1):',
+        value: disclosures.hasStateEmployment ? 'YES — Disclosed' : 'NO',
       },
       {
-        label: 'LINKED CSD ENTERPRISES:',
+        label: 'LINKED CSD ENTERPRISES (2.3/2.4):',
         value: 'None declared outside bidder entity',
       },
     ];
   }
 
-  const hasStateEmployee = directors.some((d) => d.isOrganOfStateEmployee);
-  const stateDetails = directors
-    .filter((d) => d.isOrganOfStateEmployee)
-    .map(
-      (d) =>
-        `${d.fullName}${d.organOfStateDetails ? ` (${d.organOfStateDetails})` : ''}`
-    )
-    .join('; ');
+  const stateSummary = disclosures.hasStateEmployment
+    ? `YES — ${disclosures.stateEmploymentRows
+        .map((r) => `${r.fullName} (${r.organOfState})`)
+        .join('; ')}`
+    : 'NO — No director employed by Organ of State (SCM Inst. 14/2026)';
 
-  const linkedEnterprises = directors.flatMap((d) =>
-    d.linkedCsdEnterprises.map(
-      (e) => `${e.enterpriseName} [${e.csdNumber} · ${e.status}]`
-    )
-  );
+  const linkedSummary = disclosures.hasOtherEnterprises
+    ? disclosures.linkedEnterpriseRows
+        .map((e) => `${e.enterpriseName} [${e.csdNumber} · ${e.status}]`)
+        .join('; ')
+    : 'None beyond primary CSD registration';
 
   const directorSummary = directors
     .map((d) => {
@@ -204,27 +279,23 @@ function buildSbd4DirectorRows(
       value: directorSummary.slice(0, 88),
     },
     {
-      label: 'ORGAN OF STATE EMPLOYEE:',
-      value: hasStateEmployee
-        ? `YES — ${stateDetails || 'Declared'}`.slice(0, 88)
-        : 'NO — No director employed by Organ of State (SCM Inst. 12/2026)',
+      label: 'ORGAN OF STATE EMPLOYMENT (2.1):',
+      value: stateSummary.slice(0, 88),
     },
     {
-      label: 'LINKED CSD ENTERPRISES:',
-      value:
-        linkedEnterprises.length > 0
-          ? linkedEnterprises.join('; ').slice(0, 88)
-          : 'None beyond primary CSD registration',
+      label: 'LINKED CSD ENTERPRISES (2.3/2.4):',
+      value: linkedSummary.slice(0, 88),
     },
   ];
 }
 
 async function loadTemplateOrCreate(
-  candidatePaths: string[],
+  templateFileName: ReturnableTemplateName,
   returnableBuffer?: Uint8Array
 ): Promise<{
   doc: PDFDocument;
   loadedFromDisk: boolean;
+  fromTenderPack: boolean;
   templateName: string | null;
   hasAcroFields: boolean;
 }> {
@@ -235,61 +306,134 @@ async function loadTemplateOrCreate(
       return {
         doc,
         loadedFromDisk: true,
-        templateName: 'downloaded-tender-returnable.pdf',
+        fromTenderPack: true,
+        templateName: templateFileName,
         hasAcroFields: fields.length > 0,
       };
     } catch {
-      // Fall through to disk templates
+      // Fall through to official templates directory
     }
   }
 
-  for (const relPath of candidatePaths) {
-    const templatePath = path.join(process.cwd(), relPath);
-    try {
-      const fileBytes = await fs.readFile(templatePath);
-      const doc = await PDFDocument.load(fileBytes);
-      const fields = doc.getForm().getFields();
-      return {
-        doc,
-        loadedFromDisk: true,
-        templateName: relPath,
-        hasAcroFields: fields.length > 0,
-      };
-    } catch {
-      // Try next candidate template path
-    }
-  }
+  const safeFileName = path.basename(templateFileName);
+  const templatePath = path.join(
+    process.cwd(),
+    'public',
+    'templates',
+    safeFileName
+  );
 
-  const doc = await PDFDocument.create();
-  doc.addPage([595.28, 841.89]);
-  return {
-    doc,
-    loadedFromDisk: false,
-    templateName: null,
-    hasAcroFields: false,
-  };
+  try {
+    const fileBytes = await fs.readFile(templatePath);
+    const doc = await PDFDocument.load(fileBytes);
+    const fields = doc.getForm().getFields();
+    return {
+      doc,
+      loadedFromDisk: true,
+      fromTenderPack: false,
+      templateName: safeFileName,
+      hasAcroFields: fields.length > 0,
+    };
+  } catch {
+    const doc = await PDFDocument.create();
+    doc.addPage([595.28, 841.89]);
+    return {
+      doc,
+      loadedFromDisk: false,
+      fromTenderPack: false,
+      templateName: null,
+      hasAcroFields: false,
+    };
+  }
 }
 
-function buildAcroFieldMap(
+export function buildAcroFieldMap(
   payload: SbdStampPayload,
-  stampDate: string
-): Record<string, string> {
+  stampDate: string,
+  disclosures: Sbd4DisclosuresResult,
+  ppr: Ppr2022CalculationResult
+): AcroFieldDataBundle {
   const formattedTotal = formatRand(payload.grandTotalZar);
-  const ppr = computePreferencePointsSystem(
-    payload.grandTotalZar,
-    payload.bbbeeLevel
-  );
-  const directors = payload.directors ?? [];
-  const hasStateEmp = directors.some((d) => d.isOrganOfStateEmployee);
-  const directorNames = directors.map((d) => d.fullName).join(', ');
-  const linkedCsds = directors
-    .flatMap((d) => d.linkedCsdEnterprises.map((e) => `${e.enterpriseName} (${e.csdNumber})`))
+  const invitingEntity =
+    payload.organOfState?.trim() ||
+    payload.buyerName?.trim() ||
+    payload.municipality?.trim() ||
+    'Organ of State';
+  const csdDigits = extractCsdDigits(payload.csdMaaaNumber);
+  const primaryDirector = payload.directors?.[0];
+  const signatoryName =
+    payload.signatoryName?.trim() ||
+    primaryDirector?.fullName?.trim() ||
+    payload.companyName;
+  const signatoryCapacity =
+    payload.signatoryCapacity?.trim() || 'Director / Authorized Signatory';
+  const closingDate = (payload.closingDate || stampDate).slice(0, 10);
+  const closingTime = payload.closingTime?.trim() || '11:00';
+  const bidDescription = (
+    payload.tenderTitle?.trim() ||
+    `${payload.tenderNumber} — ${invitingEntity}`
+  ).slice(0, 90);
+
+  const isSwornAffidavit = /affidavit|eme|qse/i.test(payload.bbbeeLevel || '');
+  const hasBbbee = Boolean(payload.bbbeeLevel && payload.bbbeeLevel.trim());
+  const isAccreditedRep = Boolean(payload.accreditedRepresentative);
+  const isForeign = Boolean(payload.foreignSupplier);
+
+  const directorNames = (payload.directors ?? [])
+    .map((d) => d.fullName)
+    .join(', ');
+  const linkedCsds = disclosures.linkedEnterpriseRows
+    .map((e) => `${e.enterpriseName} (${e.csdNumber})`)
     .join('; ');
 
-  return {
+  const textMap: Record<string, string> = {
+    inviting_department: invitingEntity,
+    bid_number: payload.tenderNumber,
+    closing_date: closingDate,
+    closing_time: closingTime,
+    bid_description: bidDescription,
+    bidder_legal_name: payload.companyName,
+    postal_address:
+      payload.postalAddress?.trim() ||
+      `On File — CSD ${payload.csdMaaaNumber || 'Registered'}`,
+    street_address:
+      payload.streetAddress?.trim() ||
+      `CIPC Reg ${payload.registrationNumber || 'Registered Address'}`,
+    telephone_number: payload.telephoneNumber?.trim() || 'On CSD Profile',
+    cellphone_number: payload.cellphoneNumber?.trim() || 'On CSD Profile',
+    email_address: payload.emailAddress?.trim() || 'Via CSD Supplier Record',
+    vat_registration_number:
+      payload.vatRegistrationNumber?.trim() ||
+      payload.registrationNumber ||
+      'On SARS TCS',
+    tcs_pin: payload.taxPinNumber,
+    csd_number_digits: csdDigits || payload.csdMaaaNumber,
+    signatory_name: signatoryName,
+    signatory_capacity: signatoryCapacity,
+    signature_date: stampDate,
+    signature_stamp: signatoryName,
+    municipal_account_number:
+      payload.municipalAccountNumber?.trim() ||
+      `CSD Verified (${payload.csdMaaaNumber})`,
+
+    connected_person_details: disclosures.connectedPersonDetails,
+    declarant_full_name: signatoryName,
+    declarant_position: signatoryCapacity,
+    declarant_signature: signatoryName,
+    declaration_date: stampDate,
+
+    preference_system: ppr.preferenceSystem,
+    bbbee_status_level: ppr.bbbeeLabel,
+    total_preference_points_claimed: `${ppr.claimedPoints.toFixed(2)} / ${ppr.maxPoints.toFixed(2)}`,
+    claimant_company_name: payload.companyName,
+    claimant_signatory_name: signatoryName,
+    claimant_capacity: signatoryCapacity,
+    claimant_signature: signatoryName,
+    claimant_date: stampDate,
+
     BID_NUMBER: payload.tenderNumber,
     TENDER_NUMBER: payload.tenderNumber,
-    ORGAN_OF_STATE: payload.municipality,
+    ORGAN_OF_STATE: invitingEntity,
     MUNICIPALITY: payload.municipality,
     BIDDER_NAME: payload.companyName,
     NAME_OF_BIDDER: payload.companyName,
@@ -307,32 +451,174 @@ function buildAcroFieldMap(
     PREFERENCE_POINTS_CLAIMED: `${ppr.claimedPoints.toFixed(2)} / ${ppr.maxPoints.toFixed(2)}`,
     PREFERENCE_SYSTEM: ppr.systemLabel,
     DIRECTORS_NAMES: directorNames,
-    ORGAN_OF_STATE_EMPLOYEE: hasStateEmp ? 'YES' : 'NO',
+    ORGAN_OF_STATE_EMPLOYEE: disclosures.hasStateEmployment ? 'YES' : 'NO',
     LINKED_CSD_ENTERPRISES: linkedCsds,
     TOTAL_BID_PRICE: formattedTotal,
     GRAND_TOTAL_ZAR: formattedTotal,
     DATE: stampDate,
     STAMP_DATE: stampDate,
   };
-}
 
-function populateAcroForm(
-  doc: PDFDocument,
-  fieldMap: Record<string, string>
-): void {
-  const form = doc.getForm();
-  for (const field of form.getFields()) {
-    const normalizedName = field
-      .getName()
-      .trim()
-      .toUpperCase()
-      .replace(/[^A-Z0-9]+/g, '_');
-    const value = fieldMap[normalizedName];
-    if (value && 'setText' in field && typeof field.setText === 'function') {
-      field.setText(value);
+  for (let i = 0; i < 3; i++) {
+    const idx = i + 1;
+    const row = disclosures.stateEmploymentRows[i];
+    if (row) {
+      textMap[`state_person_name_${idx}`] = row.fullName;
+      textMap[`state_relationship_${idx}`] = row.relationship;
+      textMap[`state_institution_${idx}`] = row.organOfState;
+    } else if (i === 0 && !disclosures.hasStateEmployment) {
+      textMap.state_person_name_1 = 'N/A';
+      textMap.state_relationship_1 = 'No organ of state employment';
+      textMap.state_institution_1 = 'None';
     }
   }
+
+  for (let i = 0; i < 4; i++) {
+    const idx = i + 1;
+    const row = disclosures.linkedEnterpriseRows[i];
+    if (row) {
+      textMap[`linked_enterprise_name_${idx}`] = row.enterpriseName;
+      textMap[`linked_enterprise_csd_${idx}`] = row.csdNumber;
+      textMap[`linked_enterprise_status_${idx}`] = row.status;
+    } else if (i === 0 && !disclosures.hasOtherEnterprises) {
+      textMap.linked_enterprise_name_1 = 'None declared';
+      textMap.linked_enterprise_csd_1 = 'N/A';
+      textMap.linked_enterprise_status_1 = 'N/A';
+    }
+  }
+
+  for (let i = 0; i < 3; i++) {
+    const idx = i + 1;
+    const goal = ppr.goalRows[i];
+    if (goal) {
+      textMap[`specific_goals_claimed_${idx}`] = goal.goal;
+      textMap[`max_points_${idx}`] = goal.maxPoints.toFixed(2);
+      textMap[`points_claimed_${idx}`] = goal.claimedPoints.toFixed(2);
+    }
+  }
+
+  const checkboxMap: Record<string, boolean> = {
+    bbbee_certificate_yes: hasBbbee && !isSwornAffidavit,
+    bbbee_certificate_no: !hasBbbee || isSwornAffidavit,
+    bbbee_affidavit_yes: hasBbbee && isSwornAffidavit,
+    bbbee_affidavit_no: !hasBbbee || !isSwornAffidavit,
+    accredited_rep_yes: isAccreditedRep,
+    accredited_rep_no: !isAccreditedRep,
+    foreign_supplier_yes: isForeign,
+    foreign_supplier_no: !isForeign,
+    municipal_arrears_no: true,
+    state_employed_yes: disclosures.hasStateEmployment,
+    state_employed_no: !disclosures.hasStateEmployment,
+    connected_person_yes: disclosures.hasConnectedPersons,
+    connected_person_no: !disclosures.hasConnectedPersons,
+    other_enterprises_yes: disclosures.hasOtherEnterprises,
+    other_enterprises_no: !disclosures.hasOtherEnterprises,
+  };
+
+  return { textMap, checkboxMap };
+}
+
+async function populateAcroForm(
+  doc: PDFDocument,
+  bundle: AcroFieldDataBundle
+): Promise<void> {
+  const fontRegular = await doc.embedFont(StandardFonts.Helvetica);
+  const form = doc.getForm();
+
+  for (const field of form.getFields()) {
+    const rawName = field.getName().trim();
+    const normalizedName = rawName
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '_');
+
+    if (field instanceof PDFCheckBox) {
+      const isChecked =
+        bundle.checkboxMap[rawName] ??
+        bundle.checkboxMap[normalizedName] ??
+        false;
+      if (isChecked) {
+        field.check();
+      } else {
+        field.uncheck();
+      }
+      continue;
+    }
+
+    if (field instanceof PDFTextField) {
+      const value =
+        bundle.textMap[rawName] ?? bundle.textMap[normalizedName] ?? '';
+      if (value) {
+        field.setText(value);
+      }
+    }
+  }
+
+  form.updateFieldAppearances(fontRegular);
   form.flatten();
+}
+
+async function stampTenderPackPageAnchors(
+  doc: PDFDocument,
+  rawBytes: Uint8Array,
+  bundle: AcroFieldDataBundle,
+  fallbackEntries: CoordinateEntry[]
+): Promise<void> {
+  const fontRegular = await doc.embedFont(StandardFonts.Helvetica);
+  const pages = doc.getPages();
+
+  try {
+    const proxy = await getDocumentProxy(new Uint8Array(rawBytes));
+    const page1 = await proxy.getPage(1);
+    const tc = await page1.getTextContent();
+    const tokens = (
+      tc.items as Array<{ str?: string; transform?: number[]; width?: number }>
+    )
+      .filter((it) => it.str?.trim() && it.transform)
+      .map((it) => ({
+        str: it.str!.trim(),
+        x: it.transform![4] ?? 0,
+        xEnd: (it.transform![4] ?? 0) + (it.width ?? 0),
+        y: it.transform![5] ?? 0,
+      }));
+
+    const anchorPairs: Array<{ re: RegExp; field: string; fallbackX: number }> = [
+      { re: /BID NUMBER/i, field: 'bid_number', fallbackX: 150 },
+      { re: /NAME OF BIDDER/i, field: 'bidder_legal_name', fallbackX: 155 },
+      { re: /SYSTEM PIN|TCS PIN/i, field: 'tcs_pin', fallbackX: 350 },
+      { re: /MAAA/i, field: 'csd_number_digits', fallbackX: 547 },
+      { re: /Name of company/i, field: 'claimant_company_name', fallbackX: 215 },
+    ];
+
+    const targetPage = pages[0];
+    let matchedCount = 0;
+    if (targetPage) {
+      for (const pair of anchorPairs) {
+        const hit = tokens.find((t) => pair.re.test(t.str));
+        const val = bundle.textMap[pair.field];
+        if (hit && val) {
+          targetPage.drawText(val, {
+            x: Math.max(pair.fallbackX, hit.xEnd + 6),
+            y: hit.y,
+            size: 8.5,
+            font: fontRegular,
+            color: rgb(0.06, 0.08, 0.12),
+          });
+          matchedCount += 1;
+        }
+      }
+    }
+
+    if (matchedCount > 0) {
+      return;
+    }
+  } catch {
+    // Fall back to direct coordinates below
+  }
+
+  const firstPage = pages[0];
+  if (firstPage) {
+    await stampFlatCoordinates(doc, firstPage, fallbackEntries);
+  }
 }
 
 async function stampFlatCoordinates(
@@ -470,9 +756,263 @@ async function renderCleanReturnableSheet(
   });
 }
 
+async function appendSbd4OverflowSchedulePage(
+  mergedPdf: PDFDocument,
+  payload: SbdStampPayload,
+  disclosures: Sbd4DisclosuresResult,
+  stampDate: string
+): Promise<void> {
+  const page = mergedPdf.addPage([595.28, 841.89]);
+  const fontBold = await mergedPdf.embedFont(StandardFonts.HelveticaBold);
+  const fontRegular = await mergedPdf.embedFont(StandardFonts.Helvetica);
+
+  page.drawText('SBD 4 OVERFLOW ANNEXURE — DIRECTORS & LINKED CSD ENTERPRISES', {
+    x: 48,
+    y: 786,
+    size: 12,
+    font: fontBold,
+    color: rgb(0.06, 0.08, 0.12),
+  });
+  page.drawText(
+    `${payload.companyName} (${payload.registrationNumber}) • CSD ${payload.csdMaaaNumber} • Tender ${payload.tenderNumber}`,
+    {
+      x: 48,
+      y: 768,
+      size: 9,
+      font: fontRegular,
+      color: rgb(0.3, 0.34, 0.4),
+    }
+  );
+
+  let y = 735;
+  page.drawText('DISCLOSED DIRECTORS / SHAREHOLDERS:', {
+    x: 48,
+    y,
+    size: 9.5,
+    font: fontBold,
+    color: rgb(0.14, 0.18, 0.24),
+  });
+  y -= 18;
+
+  for (const d of disclosures.overflowDirectors) {
+    if (y < 140) break;
+    page.drawText(
+      `• ${d.fullName} (ID: ${d.idNumber}) — Organ of State: ${
+        d.isOrganOfStateEmployee
+          ? `YES (${d.organOfStateDetails || 'Declared'})`
+          : 'NO'
+      }`,
+      {
+        x: 54,
+        y,
+        size: 8.5,
+        font: fontRegular,
+        color: rgb(0.08, 0.1, 0.14),
+        maxWidth: 492,
+      }
+    );
+    y -= 16;
+  }
+
+  y -= 12;
+  page.drawText('LINKED CSD-REGISTERED ENTERPRISES:', {
+    x: 48,
+    y,
+    size: 9.5,
+    font: fontBold,
+    color: rgb(0.14, 0.18, 0.24),
+  });
+  y -= 18;
+
+  for (const ent of disclosures.overflowEnterprises) {
+    if (y < 90) break;
+    page.drawText(
+      `• ${ent.enterpriseName} — ${ent.csdNumber} (${ent.status})`,
+      {
+        x: 54,
+        y,
+        size: 8.5,
+        font: fontRegular,
+        color: rgb(0.08, 0.1, 0.14),
+        maxWidth: 492,
+      }
+    );
+    y -= 15;
+  }
+
+  page.drawText(`Certified Date: ${stampDate}`, {
+    x: 48,
+    y: 64,
+    size: 8.5,
+    font: fontBold,
+    color: rgb(0.22, 0.25, 0.3),
+  });
+}
+
+async function appendResolutionOfDirectorsPage(
+  mergedPdf: PDFDocument,
+  payload: SbdStampPayload,
+  stampDate: string
+): Promise<void> {
+  const page = mergedPdf.addPage([595.28, 841.89]);
+  const fontBold = await mergedPdf.embedFont(StandardFonts.HelveticaBold);
+  const fontRegular = await mergedPdf.embedFont(StandardFonts.Helvetica);
+
+  const primaryDirector = payload.directors?.[0];
+  const signatoryName =
+    payload.signatoryName?.trim() ||
+    primaryDirector?.fullName?.trim() ||
+    'Authorized Representative';
+  const signatoryId =
+    payload.signatoryIdNumber?.trim() ||
+    primaryDirector?.idNumber?.trim() ||
+    'On File (Certified ID in Compliance Vault)';
+  const capacity =
+    payload.signatoryCapacity?.trim() || 'Director / Authorized Signatory';
+  const organ =
+    payload.organOfState?.trim() ||
+    payload.buyerName?.trim() ||
+    payload.municipality?.trim() ||
+    'Organ of State';
+  const tenderTitle =
+    payload.tenderTitle?.trim() || `Procurement Bid ${payload.tenderNumber}`;
+
+  page.drawText('COMPANIES ACT (ACT 71 OF 2008) — PROOF OF AUTHORITY', {
+    x: 50,
+    y: 785,
+    size: 9,
+    font: fontBold,
+    color: rgb(0.22, 0.25, 0.3),
+  });
+
+  page.drawText('RESOLUTION OF DIRECTORS / PROOF OF AUTHORITY TO SIGN', {
+    x: 50,
+    y: 762,
+    size: 13.5,
+    font: fontBold,
+    color: rgb(0.06, 0.08, 0.12),
+  });
+
+  page.drawLine({
+    start: { x: 50, y: 748 },
+    end: { x: 545, y: 748 },
+    thickness: 0.75,
+    color: rgb(0.75, 0.78, 0.82),
+  });
+
+  const rows: Array<[string, string]> = [
+    ['REGISTERED LEGAL ENTITY:', payload.companyName],
+    ['CIPC REGISTRATION NUMBER:', payload.registrationNumber || '—'],
+    ['CSD SUPPLIER NUMBER:', payload.csdMaaaNumber || '—'],
+    ['SARS TAX COMPLIANCE PIN:', payload.taxPinNumber || '—'],
+    ['INVITING INSTITUTION:', organ],
+    ['TENDER REFERENCE NUMBER:', payload.tenderNumber],
+    ['TENDER DESCRIPTION:', tenderTitle],
+    ['AUTHORIZED SIGNATORY:', signatoryName],
+    ['SIGNATORY IDENTITY NUMBER:', signatoryId],
+    ['DESIGNATION / CAPACITY:', capacity],
+    ['DATE OF RESOLUTION:', stampDate],
+  ];
+
+  let y = 716;
+  for (const [label, value] of rows) {
+    page.drawText(label, {
+      x: 50,
+      y,
+      size: 9,
+      font: fontBold,
+      color: rgb(0.2, 0.23, 0.28),
+    });
+    page.drawText(value, {
+      x: 235,
+      y,
+      size: 9.5,
+      font: fontRegular,
+      color: rgb(0.06, 0.08, 0.12),
+      maxWidth: 310,
+      lineHeight: 12,
+    });
+    page.drawLine({
+      start: { x: 50, y: y - 10 },
+      end: { x: 545, y: y - 10 },
+      thickness: 0.4,
+      color: rgb(0.88, 0.9, 0.92),
+    });
+    y -= 28;
+  }
+
+  const resolutionBody = `RESOLVED THAT ${signatoryName} (Identity No.: ${signatoryId}), in their capacity as ${capacity} of ${payload.companyName} (Registration No.: ${payload.registrationNumber || 'Registered'}, CSD No.: ${payload.csdMaaaNumber || 'Registered'}), be and is hereby authorized to sign and submit Tender Reference ${payload.tenderNumber} ("${tenderTitle}") and all accompanying returnable schedules (SBD/MBD 1, 4, 6.1 and Bill of Quantities) to ${organ}.`;
+
+  page.drawText('EXTRACT FROM MINUTES OF BOARD RESOLUTION:', {
+    x: 50,
+    y: y - 14,
+    size: 9.5,
+    font: fontBold,
+    color: rgb(0.14, 0.18, 0.24),
+  });
+
+  page.drawText(resolutionBody, {
+    x: 50,
+    y: y - 34,
+    size: 9.5,
+    font: fontRegular,
+    color: rgb(0.1, 0.12, 0.16),
+    maxWidth: 495,
+    lineHeight: 14,
+  });
+
+  page.drawText('SIGNED ON BEHALF OF THE BOARD:', {
+    x: 50,
+    y: 132,
+    size: 8.5,
+    font: fontBold,
+    color: rgb(0.22, 0.25, 0.3),
+  });
+  page.drawText(signatoryName, {
+    x: 235,
+    y: 134,
+    size: 9.5,
+    font: fontRegular,
+    color: rgb(0.06, 0.08, 0.12),
+  });
+  page.drawLine({
+    start: { x: 235, y: 128 },
+    end: { x: 430, y: 128 },
+    thickness: 0.6,
+    color: rgb(0.35, 0.38, 0.44),
+  });
+
+  page.drawText(`DATE: ${stampDate}`, {
+    x: 448,
+    y: 132,
+    size: 8.5,
+    font: fontBold,
+    color: rgb(0.22, 0.25, 0.3),
+  });
+}
+
+function stampInitialsOnAllPages(
+  doc: PDFDocument,
+  fontBold: PDFFont,
+  initials: string
+): void {
+  const label = `Initials: ${initials}`;
+  for (const page of doc.getPages()) {
+    const { width } = page.getSize();
+    page.drawText(label, {
+      x: width - 68,
+      y: 22,
+      size: 8,
+      font: fontBold,
+      color: rgb(0.18, 0.22, 0.28),
+    });
+  }
+}
+
 /**
- * Stamps SBD 1, SBD 4 (PFMA SCM Instruction 12 & 14 of 2026/27), and SBD 6.1
- * (PPR 2022 80/20 vs 90/10 at R50M) using `pdf-lib`.
+ * Stamps SBD/MBD 1, SBD 4 (PFMA SCM Instruction 14 of 2026/27), and SBD/MBD 6.1
+ * (PPR 2022 80/20 vs 90/10 at R50M) in-place using AcroForm widgets, initials
+ * every page, and appends the Resolution of Directors page.
  */
 export async function generateStampedSbdPackage(
   payload: SbdStampPayload
@@ -480,25 +1020,41 @@ export async function generateStampedSbdPackage(
   const mergedPdf = await PDFDocument.create();
   const stampDate = new Date().toISOString().slice(0, 10);
   const templatesLoaded: string[] = [];
-  const fieldMap = buildAcroFieldMap(payload, stampDate);
   const formattedTotal = formatRand(payload.grandTotalZar);
-  const ppr = computePreferencePointsSystem(
+
+  const disclosures = buildSbd4Disclosures({
+    directors: payload.directors,
+    connectedPersonDetails: payload.connectedPersonDetails,
+    hasConnectedPersons: payload.hasConnectedPersons,
+  });
+  const ppr = calculatePpr2022Points(
     payload.grandTotalZar,
-    payload.bbbeeLevel
+    payload.bbbeeLevel,
+    payload.specificGoals
   );
-  const sbd4DirectorRows = buildSbd4DirectorRows(payload.directors);
+  const fieldBundle = buildAcroFieldMap(payload, stampDate, disclosures, ppr);
+  const fallbackRows = buildSbd4FallbackRows(payload.directors, disclosures);
+  const selectedFiles = resolveReturnableTemplates({
+    submissionChannel: payload.submissionChannel,
+    organOfState: payload.organOfState,
+    buyerName: payload.buyerName,
+    municipality: payload.municipality,
+  });
+  const isMunicipal = selectedFiles[0] === 'mbd1.pdf';
+  const invitingEntity =
+    payload.organOfState?.trim() ||
+    payload.buyerName?.trim() ||
+    payload.municipality;
+
   let usedAcroForm = false;
 
-  const formConfigs: SbdFormConfig[] = [
+  const formSlots: FormStampSlot[] = [
     {
-      label: 'SBD 1',
-      candidatePaths: [
-        'public/templates/sbd1.pdf',
-        'templates/sbd1.pdf',
-      ],
+      label: isMunicipal ? 'MBD 1' : 'SBD 1',
+      templateFile: selectedFiles[0],
       flatCoordinates: [
         { x: 214, y: 720, value: payload.tenderNumber },
-        { x: 214, y: 686, value: payload.municipality },
+        { x: 214, y: 686, value: invitingEntity },
         { x: 214, y: 652, value: payload.companyName },
         { x: 214, y: 618, value: payload.registrationNumber },
         { x: 214, y: 584, value: payload.csdMaaaNumber },
@@ -507,13 +1063,19 @@ export async function generateStampedSbdPackage(
         { x: 214, y: 482, value: formattedTotal },
       ],
       cleanSheet: {
-        formTitle: 'SBD 1 — PART A: INVITATION TO BID',
-        subtitle: 'Standard Bidding Document — Returnable Bid Identification & Offer Summary',
+        formTitle: isMunicipal
+          ? 'MBD 1 — PART A: INVITATION TO BID'
+          : 'SBD 1 — PART A: INVITATION TO BID',
+        subtitle:
+          'Standard Bidding Document — Returnable Bid Identification & Offer Summary',
         rows: [
           { label: 'BID NUMBER:', value: payload.tenderNumber },
-          { label: 'ORGAN OF STATE / MUNICIPALITY:', value: payload.municipality },
+          { label: 'ORGAN OF STATE / MUNICIPALITY:', value: invitingEntity },
           { label: 'NAME OF BIDDER:', value: payload.companyName },
-          { label: 'COMPANY REGISTRATION NO.:', value: payload.registrationNumber },
+          {
+            label: 'COMPANY REGISTRATION NO.:',
+            value: payload.registrationNumber,
+          },
           { label: 'CSD SUPPLIER NUMBER (MAAA):', value: payload.csdMaaaNumber },
           { label: 'SARS TAX COMPLIANCE PIN:', value: payload.taxPinNumber },
           { label: 'CIDB CONTRACTOR GRADING:', value: payload.cidbGrade },
@@ -526,30 +1088,29 @@ export async function generateStampedSbdPackage(
     },
     {
       label: 'SBD 4',
-      candidatePaths: [
-        'public/templates/sbd4.pdf',
-        'templates/sbd4.pdf',
-      ],
+      templateFile: selectedFiles[1],
       flatCoordinates: [
         { x: 214, y: 720, value: payload.companyName },
         { x: 214, y: 686, value: payload.registrationNumber },
-        { x: 214, y: 652, value: sbd4DirectorRows[0]?.value ?? '' },
-        { x: 214, y: 618, value: sbd4DirectorRows[1]?.value ?? '' },
-        { x: 214, y: 584, value: sbd4DirectorRows[2]?.value ?? '' },
+        { x: 214, y: 652, value: fallbackRows[0]?.value ?? '' },
+        { x: 214, y: 618, value: fallbackRows[1]?.value ?? '' },
+        { x: 214, y: 584, value: fallbackRows[2]?.value ?? '' },
         { x: 214, y: 550, value: `${payload.tenderNumber} (${stampDate})` },
       ],
       cleanSheet: {
-        formTitle: "SBD 4 — BIDDER'S DISCLOSURE (SCM INST. 12 & 14 OF 2026/27)",
-        subtitle: 'Declaration of Directors, State Employment & Linked CSD Enterprises',
+        formTitle: "SBD 4 — BIDDER'S DISCLOSURE (SCM INST. 14 OF 2026/27)",
+        subtitle:
+          'Declaration of Directors, State Employment & Linked CSD Enterprises',
         rows: [
           { label: 'LEGAL ENTITY NAME:', value: payload.companyName },
           { label: 'REGISTRATION NUMBER:', value: payload.registrationNumber },
           { label: 'CSD SUPPLIER NUMBER (MAAA):', value: payload.csdMaaaNumber },
           { label: 'TENDER REFERENCE:', value: payload.tenderNumber },
-          ...sbd4DirectorRows,
+          ...fallbackRows,
           {
             label: 'INDEPENDENT BID DETERMINATION:',
-            value: 'YES — Bid prepared independently without collusion (PFMA SCM Inst. 12)',
+            value:
+              'YES — Bid prepared independently without collusion (PFMA SCM Inst. 14)',
           },
         ],
         declaration:
@@ -557,25 +1118,29 @@ export async function generateStampedSbdPackage(
       },
     },
     {
-      label: 'SBD 6.1',
-      candidatePaths: [
-        'public/templates/sbd6_1.pdf',
-        'templates/sbd6_1.pdf',
-      ],
+      label: isMunicipal ? 'MBD 6.1' : 'SBD 6.1',
+      templateFile: selectedFiles[2],
       flatCoordinates: [
         { x: 214, y: 720, value: payload.tenderNumber },
-        { x: 214, y: 686, value: payload.municipality },
+        { x: 214, y: 686, value: invitingEntity },
         { x: 214, y: 652, value: payload.companyName },
         { x: 214, y: 618, value: ppr.systemLabel },
-        { x: 214, y: 584, value: `${ppr.claimedPoints.toFixed(2)} / ${ppr.maxPoints.toFixed(2)}` },
+        {
+          x: 214,
+          y: 584,
+          value: `${ppr.claimedPoints.toFixed(2)} / ${ppr.maxPoints.toFixed(2)}`,
+        },
         { x: 214, y: 550, value: formattedTotal },
       ],
       cleanSheet: {
-        formTitle: 'SBD 6.1 — PREFERENCE POINTS CLAIM FORM (PPR 2022)',
-        subtitle: 'Preferential Procurement Regulations, 2022 — Specific Goals & B-BBEE Recognition',
+        formTitle: isMunicipal
+          ? 'MBD 6.1 — PREFERENCE POINTS CLAIM FORM (PPR 2022)'
+          : 'SBD 6.1 — PREFERENCE POINTS CLAIM FORM (PPR 2022)',
+        subtitle:
+          'Preferential Procurement Regulations, 2022 — Specific Goals & B-BBEE Recognition',
         rows: [
           { label: 'TENDER REFERENCE:', value: payload.tenderNumber },
-          { label: 'ORGAN OF STATE / MUNICIPALITY:', value: payload.municipality },
+          { label: 'ORGAN OF STATE / MUNICIPALITY:', value: invitingEntity },
           { label: 'NAME OF BIDDER:', value: payload.companyName },
           { label: 'PREFERENCE POINT SYSTEM:', value: ppr.systemLabel },
           { label: 'B-BBEE CONTRIBUTOR STATUS:', value: payload.bbbeeLevel },
@@ -592,24 +1157,31 @@ export async function generateStampedSbdPackage(
     },
   ];
 
-  for (let i = 0; i < formConfigs.length; i++) {
-    const config = formConfigs[i];
+  for (let i = 0; i < formSlots.length; i++) {
+    const slot = formSlots[i];
     const downloadedBuf = payload.returnablePdfBuffers?.[i];
     const loaded = await loadTemplateOrCreate(
-      config.candidatePaths,
+      slot.templateFile,
       downloadedBuf
     );
-    if (loaded.loadedFromDisk && loaded.templateName) {
+    if (loaded.templateName) {
       templatesLoaded.push(loaded.templateName);
     }
 
     if (loaded.hasAcroFields) {
       usedAcroForm = true;
-      populateAcroForm(loaded.doc, fieldMap);
+      await populateAcroForm(loaded.doc, fieldBundle);
+    } else if (loaded.fromTenderPack && downloadedBuf) {
+      await stampTenderPackPageAnchors(
+        loaded.doc,
+        downloadedBuf,
+        fieldBundle,
+        slot.flatCoordinates
+      );
     } else if (loaded.loadedFromDisk) {
       const page = loaded.doc.getPages()[0];
       if (page) {
-        await stampFlatCoordinates(loaded.doc, page, config.flatCoordinates);
+        await stampFlatCoordinates(loaded.doc, page, slot.flatCoordinates);
       }
     } else {
       const page = loaded.doc.getPages()[0];
@@ -617,7 +1189,7 @@ export async function generateStampedSbdPackage(
         await renderCleanReturnableSheet(
           loaded.doc,
           page,
-          config.cleanSheet,
+          slot.cleanSheet,
           stampDate
         );
       }
@@ -630,7 +1202,25 @@ export async function generateStampedSbdPackage(
     for (const p of copiedPages) {
       mergedPdf.addPage(p);
     }
+
+    if (slot.label === 'SBD 4' && disclosures.requiresOverflowSchedule) {
+      await appendSbd4OverflowSchedulePage(
+        mergedPdf,
+        payload,
+        disclosures,
+        stampDate
+      );
+    }
   }
+
+  await appendResolutionOfDirectorsPage(mergedPdf, payload, stampDate);
+
+  const fontBold = await mergedPdf.embedFont(StandardFonts.HelveticaBold);
+  const initials = deriveSignatoryInitials(
+    payload.signatoryName ?? payload.directors?.[0]?.fullName,
+    payload.companyName
+  );
+  stampInitialsOnAllPages(mergedPdf, fontBold, initials);
 
   const pdfBytes = await mergedPdf.save();
   let extractedSummary = '';
@@ -641,19 +1231,20 @@ export async function generateStampedSbdPackage(
     });
     extractedSummary = extracted.text.slice(0, 320);
   } catch {
-    extractedSummary = `Stamped SBD 1, SBD 4, and SBD 6.1 returnables (${payload.tenderNumber}) for ${payload.companyName}.`;
+    extractedSummary = `Stamped ${formSlots.map((c) => c.label).join(', ')} returnables (${payload.tenderNumber}) for ${payload.companyName}.`;
   }
 
   const base64Pdf = Buffer.from(pdfBytes).toString('base64');
+  const filePrefix = isMunicipal ? 'MBD_1_SBD4_MBD6_1' : 'SBD_1_4_6_1';
 
   return {
-    fileName: `${payload.tenderId}_SBD_1_4_6_1_Stamped.pdf`,
+    fileName: `${payload.tenderId}_${filePrefix}_Stamped.pdf`,
     pageCount: mergedPdf.getPageCount(),
     byteLength: pdfBytes.byteLength,
     stampingMethod: usedAcroForm ? 'acroform' : 'coordinate-fallback',
     templatesLoaded,
     extractedSummary,
-    formsStamped: formConfigs.map((c) => c.label),
+    formsStamped: formSlots.map((c) => c.label),
     base64Pdf,
   };
 }
@@ -662,7 +1253,7 @@ export async function generateStampedSbdPackage(
  * Builds the single consolidated submission pack PDF under 30MB when a contractor
  * approves a tender on `/bid/[id]`:
  *   1) Cover Sheet & Compliance Matrix
- *   2) Stamped SBD 1, 4, 6.1 / MBD returnables
+ *   2) Stamped SBD/MBD 1, 4, 6.1 returnables + Resolution of Directors
  *   3) Active Compliance Vault PDFs / certified ID images from Convex `_storage`
  */
 export async function buildMergedSubmissionPack(
@@ -672,7 +1263,6 @@ export async function buildMergedSubmissionPack(
   const fontBold = await pack.embedFont(StandardFonts.HelveticaBold);
   const fontRegular = await pack.embedFont(StandardFonts.Helvetica);
 
-  // 1. Cover & Compliance Matrix Page
   const cover = pack.addPage([595.28, 841.89]);
   cover.drawText('KLERKDESK CONSOLIDATED TENDER SUBMISSION PACK', {
     x: 48,
@@ -761,14 +1351,12 @@ export async function buildMergedSubmissionPack(
     y -= 16;
   }
 
-  // 2. Append Stamped SBD 1 / 4 / 6.1 Returnables
   const sbdDoc = await PDFDocument.load(input.stampedSbdBytes);
   const sbdPages = await pack.copyPages(sbdDoc, sbdDoc.getPageIndices());
   for (const page of sbdPages) {
     pack.addPage(page);
   }
 
-  // 3. Append Compliance Vault PDFs & Certified Images
   let attachmentsIncluded = 0;
   for (const attachment of input.complianceAttachments) {
     if (!attachment.bytes || attachment.bytes.byteLength === 0) continue;
@@ -843,5 +1431,16 @@ export async function extractPdfPlainText(bytes: Uint8Array): Promise<{
   return {
     totalPages: result.totalPages,
     text: result.text,
+  };
+}
+
+export async function extractPdfPagesPlainText(bytes: Uint8Array): Promise<{
+  totalPages: number;
+  pages: string[];
+}> {
+  const result = await extractText(bytes, { mergePages: false });
+  return {
+    totalPages: result.totalPages,
+    pages: Array.isArray(result.text) ? result.text : [String(result.text)],
   };
 }

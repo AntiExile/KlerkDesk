@@ -327,11 +327,11 @@ export function Sidebar({
         </Link>
       </div>
 
-      {/* Active Tender Threads */}
+      {/* Active Klerk Desks */}
       <div className="flex-1 overflow-y-auto px-2.5 space-y-0.5">
         <div className="px-2 pb-1.5 flex items-center justify-between gap-2">
           <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-600">
-            Tender Threads
+            Klerk Desks
           </span>
           {onOpenSectorPreferences && (
             <button
@@ -367,7 +367,7 @@ export function Sidebar({
         {tenders.length === 0 ? (
           <div className="mx-1 mt-1 rounded-xl bg-[#161619] border border-white/[0.06] p-3 space-y-2">
             <div className="text-[11px] font-medium text-zinc-300">
-              No active tender threads yet
+              No active klerk desks yet
             </div>
             <p className="text-[10.5px] text-zinc-500 leading-relaxed m-0">
               Your workspace starts clean. Scan eTenders &amp; municipal portals or upload a tender PDF to begin.

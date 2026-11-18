@@ -235,7 +235,7 @@ export function TenderScanModal({
                   Tailor your KlerkDesk Tender Feed
                 </h2>
                 <p className="text-xs text-zinc-400 m-0">
-                  Choose your official eTenders procurement sectors and provinces so Klerk only pulls relevant live opportunities into your Tender Threads.
+                  Choose your official eTenders procurement sectors and provinces so Klerk only pulls relevant live opportunities into your Klerk Desks.
                 </p>
               </div>
               <button

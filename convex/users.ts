@@ -33,7 +33,7 @@ function daysFromNowIso(days: number): string {
 
 /**
  * Isolated demo sandbox seeder strictly restricted to `demo@mundusmk.co.za`.
- * Real contractor accounts start cleanly with empty Compliance Vault, Tender Threads,
+ * Real contractor accounts start cleanly with empty Compliance Vault, Klerk Desks,
  * and Contractor Profile until they upload or scan live data.
  */
 export async function seedDemoWorkspaceForUser(
